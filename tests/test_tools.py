@@ -25,7 +25,16 @@ class FakeClient:
         ]
 
     def get_activity(self, activity_id):
-        return {"activityId": int(activity_id), "activityName": "Morning Run", "summaryDTO": {"distance": 5000.0}}
+        return {
+            "activityId": int(activity_id),
+            "activityName": "Morning Run",
+            "summaryDTO": {
+                "distance": 5000.0,
+                "duration": 1500.0,
+                "movingDuration": 1490.0,
+                "elapsedDuration": 1525.0,
+            },
+        }
 
     def get_activity_details(self, activity_id):
         return {
@@ -35,6 +44,29 @@ class FakeClient:
             "metricDescriptors": [{"key": "heartRate"}] * 12,
             "activityDetailMetrics": [[1, 2, 3]] * 1000,
             "geoPolylineDTO": {"polyline": ["a"] * 500},
+        }
+
+    def get_activity_splits(self, activity_id):
+        return {
+            "lapDTOs": [
+                {
+                    "lapIndex": 1,
+                    "distance": 1000.0,
+                    "duration": 240.0,
+                    "movingDuration": 238.0,
+                    "elapsedDuration": 250.0,
+                    "averageHR": 164.0,
+                    "maxHR": 170.0,
+                    "averagePower": 498.0,
+                    "maxPower": 520.0,
+                    "averageRunCadence": 180.0,
+                    "intensityType": "ACTIVE",
+                    "elevationGain": 5.0,
+                    "elevationLoss": 2.0,
+                    "startLatitude": 58.1,
+                    "startLongitude": 8.0,
+                }
+            ]
         }
 
     def get_sleep_data(self, date):
@@ -92,6 +124,38 @@ def test_get_activity_details_strips_bulky_keys(monkeypatch):
     assert result["details"] == {"activityId": 123, "detailsAvailable": True, "measurementCount": 42}
     for bulky_key in ("metricDescriptors", "activityDetailMetrics", "geoPolylineDTO"):
         assert bulky_key not in result["details"]
+    assert result["timing"] == {
+        "elapsed_time_s": 1525.0,
+        "timer_time_s": 1500.0,
+        "moving_time_s": 1490.0,
+        "stopped_time_s": 35.0,
+    }
+
+
+def test_get_activity_laps_formats_and_strips_gps(monkeypatch):
+    monkeypatch.setattr(server, "get_client", lambda: FakeClient())
+    result = json.loads(server.get_activity_laps("123"))
+    assert result["lap_count"] == 1
+    lap = result["laps"][0]
+    assert lap["lap"] == 1
+    assert lap["distance_m"] == 1000.0
+    assert lap["elapsed_time_s"] == 250.0
+    assert lap["timer_time_s"] == 240.0
+    assert lap["moving_time_s"] == 238.0
+    assert lap["pace_min_per_km"] == 3.97  # (238/60) / (1000/1000)
+    assert lap["avg_hr"] == 164.0
+    assert lap["intensity"] == "ACTIVE"
+    # GPS omitted by default
+    for k in ("startLatitude", "startLongitude", "endLatitude", "endLongitude"):
+        assert k not in lap
+
+
+def test_get_activity_laps_includes_gps_on_request(monkeypatch):
+    monkeypatch.setattr(server, "get_client", lambda: FakeClient())
+    result = json.loads(server.get_activity_laps("123", include_gps=True))
+    lap = result["laps"][0]
+    assert lap["startLatitude"] == 58.1
+    assert lap["startLongitude"] == 8.0
 
 
 def test_get_sleep_strips_per_minute_arrays(monkeypatch):

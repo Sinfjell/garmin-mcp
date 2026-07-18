@@ -104,6 +104,61 @@ _SLEEP_STRIP_KEYS = {
 }
 
 
+def _fmt_timing(summary: dict) -> dict:
+    """Extract the explicit timing breakdown from an activity summary.
+
+    Garmin distinguishes three clocks that are easy to confuse: elapsed
+    (wall time start→save, includes post-finish standing), timer (what the
+    watch counted), and moving (auto-pause removed). Surfacing them
+    separately stops a consumer guessing which one is the "race time".
+    """
+    sd = summary.get("summaryDTO") or summary
+    elapsed = sd.get("elapsedDuration")
+    moving = sd.get("movingDuration")
+    timer = sd.get("duration")
+    stopped = round(elapsed - moving, 1) if elapsed is not None and moving is not None else None
+    return {
+        "elapsed_time_s": round(elapsed, 1) if elapsed is not None else None,
+        "timer_time_s": round(timer, 1) if timer is not None else None,
+        "moving_time_s": round(moving, 1) if moving is not None else None,
+        "stopped_time_s": stopped,
+    }
+
+
+# GPS lat/long are stripped from laps by default: they leak location (home
+# address for runs that start at home) and add noise. Opt in with include_gps.
+_LAP_GPS_KEYS = ("startLatitude", "startLongitude", "endLatitude", "endLongitude")
+
+
+def _fmt_lap(lap: dict, include_gps: bool = False) -> dict:
+    distance_m = round(lap.get("distance") or 0, 1)
+    moving_s = lap.get("movingDuration")
+    # Pace from moving time (the standard convention). Meaningless for
+    # non-distance sports, so only computed when the lap covered ground.
+    pace = round((moving_s / 60) / (distance_m / 1000), 2) if distance_m and moving_s else None
+    out = {
+        "lap": lap.get("lapIndex"),
+        "distance_m": distance_m,
+        "elapsed_time_s": round(lap["elapsedDuration"], 1) if lap.get("elapsedDuration") is not None else None,
+        "timer_time_s": round(lap["duration"], 1) if lap.get("duration") is not None else None,
+        "moving_time_s": round(moving_s, 1) if moving_s is not None else None,
+        "pace_min_per_km": pace,
+        "avg_hr": lap.get("averageHR"),
+        "max_hr": lap.get("maxHR"),
+        "avg_power": lap.get("averagePower"),
+        "max_power": lap.get("maxPower"),
+        "avg_run_cadence": lap.get("averageRunCadence"),
+        "intensity": lap.get("intensityType"),
+        "elevation_gain_m": lap.get("elevationGain"),
+        "elevation_loss_m": lap.get("elevationLoss"),
+    }
+    if include_gps:
+        for k in _LAP_GPS_KEYS:
+            if lap.get(k) is not None:
+                out[k] = lap[k]
+    return out
+
+
 def _fmt_body_battery_day(item: dict) -> dict:
     values = item.get("bodyBatteryValuesArray") or []
     levels = [v[1] for v in values if len(v) > 1 and isinstance(v[1], (int, float))]
@@ -137,15 +192,45 @@ def get_activity_details(activity_id: str) -> str:
     or list_activities_by_date (the "id" field). Returns a JSON object
     combining the activity summary (name, type, distance, duration, HR,
     training effect) with a nested "details" object (measurement counts).
-    Bulky per-sample metric arrays and GPS polylines are stripped to keep
-    the response small — use Garmin Connect directly for raw sample data.
+    A "timing" object gives the explicit elapsed / timer / moving / stopped
+    breakdown so the caller never has to guess which duration is the
+    finish time. For a per-lap breakdown (interval or km splits), call
+    get_activity_laps. Bulky per-sample metric arrays and GPS polylines are
+    stripped to keep the response small — use Garmin Connect directly for
+    raw sample data.
     """
 
     def build(c: Garmin) -> dict:
         summary = c.get_activity(activity_id)
         detail = c.get_activity_details(activity_id)
         details = {k: v for k, v in detail.items() if k not in _ACTIVITY_DETAIL_STRIP_KEYS}
-        return {**summary, "details": details}
+        return {**summary, "timing": _fmt_timing(summary), "details": details}
+
+    return _tool_call(build)
+
+
+@mcp.tool()
+def get_activity_laps(activity_id: str, include_gps: bool = False) -> str:
+    """Get the individual laps of an activity (intervals or auto-km splits).
+
+    `activity_id` is the numeric id from list_recent_activities. Returns a
+    JSON object with "lap_count" and a "laps" array, one entry per real
+    Garmin lap: lap number, distance_m, the three durations (elapsed_time_s,
+    timer_time_s, moving_time_s), pace_min_per_km, avg/max HR, avg/max power,
+    avg_run_cadence, "intensity" (e.g. WARMUP/ACTIVE/REST — the interval
+    structure), and elevation gain/loss. Use this instead of
+    get_activity_details when you need per-lap threshold or split analysis.
+    GPS start/end coordinates are omitted by default; pass include_gps=true
+    to include them.
+    """
+
+    def build(c: Garmin) -> dict:
+        laps = c.get_activity_splits(activity_id).get("lapDTOs") or []
+        return {
+            "activity_id": activity_id,
+            "lap_count": len(laps),
+            "laps": [_fmt_lap(lap, include_gps) for lap in laps],
+        }
 
     return _tool_call(build)
 

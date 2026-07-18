@@ -69,7 +69,8 @@ Restart your client and ask something like "How did I sleep last night?"
 | Tool | Returns |
 |---|---|
 | `list_recent_activities(limit=10)` | Recent activities: date, type, name, distance, duration, avg HR, pace |
-| `get_activity_details(activity_id)` | Full detail for one activity (stripped of bulky sample/GPS data) |
+| `get_activity_details(activity_id)` | Full detail for one activity, incl. explicit elapsed/timer/moving/stopped timing (stripped of bulky sample/GPS data) |
+| `get_activity_laps(activity_id, include_gps=False)` | Per-lap breakdown: distance, durations, pace, HR, power, cadence, interval intensity (WARMUP/ACTIVE/REST) |
 | `list_activities_by_date(start_date, end_date)` | Activity summaries in a date range |
 | `get_daily_stats(date)` | Steps, calories, resting HR, stress for one day |
 | `get_sleep(date)` | Sleep stages, sleep score, overnight HRV and resting HR |
