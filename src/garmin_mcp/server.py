@@ -242,13 +242,42 @@ def main() -> None:
         action="store_true",
         help="Print registered tool names and descriptions, then exit (no Garmin connection made)",
     )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "streamable-http"],
+        default="stdio",
+        help="Transport to serve over (default: stdio). Use streamable-http to host this "
+        "server remotely, e.g. as a claude.ai custom connector.",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host to bind to when --transport=streamable-http (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="Port to bind to when --transport=streamable-http (default: 8765)",
+    )
+    parser.add_argument(
+        "--path",
+        default="/mcp",
+        help="URL path the streamable-http endpoint mounts at (default: /mcp). Give it an "
+        "unguessable value to use as a lightweight secret when hosting remotely.",
+    )
     args = parser.parse_args()
 
     if args.list_tools:
         _print_tool_list()
         return
 
-    mcp.run(transport="stdio")
+    if args.transport == "streamable-http":
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        mcp.settings.streamable_http_path = args.path
+
+    mcp.run(transport=args.transport)
 
 
 if __name__ == "__main__":

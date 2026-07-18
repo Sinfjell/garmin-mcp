@@ -92,6 +92,63 @@ should use `garmin-mcp-auth` instead.
 **Token cache location:** `~/.garminconnect` by default, or the path in
 `GARMIN_TOKENS` if set.
 
+## Remote / hosted mode (use from Claude mobile & web)
+
+By default this server speaks stdio and is meant to run as a local subprocess
+of your MCP client. You can instead run it as a long-lived HTTP service and
+add it to claude.ai as a **custom connector**, which also makes it reachable
+from Claude on mobile.
+
+### 1. Log in once, on the host
+
+```bash
+garmin-mcp-auth
+```
+
+Run this on the machine that will host the server (interactively, so it can
+handle MFA). The cached token in `~/.garminconnect` (or `GARMIN_TOKENS`) is
+reused on every request — the server does not log in again per request.
+Avoid triggering fresh logins often: Garmin rate-limits and sometimes blocks
+sign-ins from datacenter IPs, so a stable, long-lived cached session is the
+goal, not routine re-auth.
+
+### 2. Run the server in streamable-http mode
+
+```bash
+garmin-mcp --transport streamable-http --host 127.0.0.1 --port 8765 --path /<random-secret>/mcp
+```
+
+- `--transport streamable-http` switches from stdio to an HTTP endpoint.
+- `--host` / `--port` control what the server binds to (default
+  `127.0.0.1:8765` — bind to `127.0.0.1` and put a reverse proxy in front
+  rather than exposing the process directly).
+- `--path` sets the URL path the MCP endpoint mounts at (default `/mcp`).
+  Set it to a long random value (e.g. `/8f2c1a9e7b.../mcp`) and treat it as a
+  secret — see below.
+
+### 3. Put TLS and a reverse proxy in front
+
+This mode has no built-in authentication. The security model is:
+
+- **The path is the secret.** Anyone with the full URL — including the
+  random path segment — can call every tool and read your Garmin data.
+  Anyone without it gets a 404. This is possession-of-URL security, not real
+  authentication — good enough for a personal deployment you control, not
+  for anything shared or high-stakes.
+- **TLS is required in practice.** Run the server behind a reverse proxy
+  (Caddy, nginx, Cloudflare Tunnel, etc.) that terminates HTTPS, so the
+  secret path isn't sent in the clear. Point the proxy at
+  `127.0.0.1:<port>` and expose only the proxy's HTTPS URL.
+- Don't log the URL, commit it, or paste it anywhere public — it's
+  effectively a credential.
+
+### 4. Add it to claude.ai as a custom connector
+
+In claude.ai: **Settings → Connectors → Add custom connector**, then paste
+your full HTTPS URL (e.g. `https://mcp.example.com/8f2c1a9e7b.../mcp`). Once
+added, it's available from Claude on web and mobile, not just Claude Code or
+Desktop.
+
 ## Security & privacy
 
 - Your credentials never leave your machine and are never stored by this
