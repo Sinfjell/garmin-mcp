@@ -191,6 +191,24 @@ def _speed_to_pace(speed_m_s: Any) -> tuple[str | None, float | None]:
     return f"{minutes}:{seconds:02d}", round(secs_per_km / 60, 2)
 
 
+# Garmin's lactate-threshold endpoints report speed in units of 10 m/s (i.e.
+# true m/s divided by 10), unlike activity `averageSpeed` which is plain m/s.
+# A raw 0.417 is really 4.17 m/s (~4:00/km), not 40:00/km. Verified 2026-07-20
+# against a same-day track session whose activity averageSpeed matched raw * 10.
+LT_SPEED_SCALE = 10.0
+
+
+def _lt_speed_to_m_s(raw_speed: Any) -> float | None:
+    """Scale Garmin's lactate-threshold speed field to true m/s.
+
+    Returns None for missing/non-numeric input. See LT_SPEED_SCALE for why the
+    threshold endpoints need this while activity speed does not.
+    """
+    if not isinstance(raw_speed, (int, float)):
+        return None
+    return raw_speed * LT_SPEED_SCALE
+
+
 def _seconds_to_clock(secs: Any) -> str | None:
     """Format a duration in seconds as "H:MM:SS" (or "M:SS" under an hour)."""
     if not isinstance(secs, (int, float)) or secs <= 0:
@@ -208,15 +226,17 @@ def _fmt_lactate_threshold(raw: dict) -> dict:
 
     The library returns {"speed_and_heart_rate": {...}, "power": {...}}. The
     threshold heart rate (LTHR) and threshold speed are what a runner uses to
-    set zones, so we surface those plus a formatted pace. Speed is m/s.
+    set zones, so we surface those plus a formatted pace. Garmin's raw threshold
+    speed is scaled (see LT_SPEED_SCALE); we normalize it to true m/s here.
     """
     shr = raw.get("speed_and_heart_rate") or {}
-    pace_str, pace_dec = _speed_to_pace(shr.get("speed"))
+    speed_m_s = _lt_speed_to_m_s(shr.get("speed"))
+    pace_str, pace_dec = _speed_to_pace(speed_m_s)
     return {
         "heart_rate_bpm": shr.get("heartRate"),
         "pace_per_km": pace_str,
         "pace_min_per_km": pace_dec,
-        "speed_m_s": round(shr["speed"], 3) if isinstance(shr.get("speed"), (int, float)) else None,
+        "speed_m_s": round(speed_m_s, 3) if speed_m_s is not None else None,
         "measured_date": shr.get("calendarDate"),
     }
 
@@ -317,7 +337,7 @@ def _extract_stat_series(obj: Any, value_keys: tuple[str, ...]) -> list[dict]:
                 break
     if not isinstance(obj, list):
         return []
-    date_keys = ("calendarDate", "date", "startDate", "timestamp")
+    date_keys = ("calendarDate", "date", "startDate", "from", "timestamp")
     points = []
     for pt in obj:
         if not isinstance(pt, dict):
@@ -346,13 +366,14 @@ def _fmt_threshold_history(raw: dict) -> dict:
     speed_by_date = {p["date"]: p["value"] for p in speed_pts}
     points = []
     for d in sorted(set(hr_by_date) | set(speed_by_date)):
-        pace_str, pace_dec = _speed_to_pace(speed_by_date.get(d))
+        speed_m_s = _lt_speed_to_m_s(speed_by_date.get(d))
+        pace_str, pace_dec = _speed_to_pace(speed_m_s)
         points.append({
             "date": d,
             "lthr_bpm": hr_by_date.get(d),
             "pace_per_km": pace_str,
             "pace_min_per_km": pace_dec,
-            "speed_m_s": round(speed_by_date[d], 3) if isinstance(speed_by_date.get(d), (int, float)) else None,
+            "speed_m_s": round(speed_m_s, 3) if speed_m_s is not None else None,
         })
     return {"points": points}
 
