@@ -258,6 +258,105 @@ def _fmt_race_predictions(raw: Any) -> dict:
     return out
 
 
+# Best-effort map of Garmin personal-record typeIds → (label, unit) for the
+# common *running* records. Garmin's typeId scheme is internal and undocumented;
+# only the widely-confirmed running set is mapped here. Any typeId not listed
+# keeps label=None so an unknown record is never mislabeled — the raw type_id
+# and value are always preserved so the truth survives a wrong/missing label.
+_PR_RUNNING_TYPES = {
+    1: ("fastest_1km", "time"),
+    2: ("fastest_1mile", "time"),
+    3: ("fastest_5km", "time"),
+    4: ("fastest_10km", "time"),
+    7: ("longest_run", "distance"),
+}
+
+_PR_DATE_KEYS = ("prStartTimeGmtFormatted", "prStartTimeGmt", "prStartTimeLocalFormatted", "prStartTimeLocal")
+
+
+def _fmt_personal_record(rec: dict) -> dict:
+    """Reshape one personal-record entry, preserving raw type_id + value.
+
+    value is seconds for time records and metres for distance records. We
+    format it only for typeIds in the known running map; everything else keeps
+    the raw value and a null label rather than a guessed one.
+    """
+    type_id = rec.get("typeId")
+    value = rec.get("value")
+    label, unit = _PR_RUNNING_TYPES.get(type_id, (None, None))
+    if unit == "time":
+        formatted = _seconds_to_clock(value)
+    elif unit == "distance" and isinstance(value, (int, float)):
+        formatted = f"{round(value / 1000, 2)} km"
+    else:
+        formatted = None
+    date = next((rec[k] for k in _PR_DATE_KEYS if rec.get(k)), None)
+    return {
+        "record": label,
+        "type_id": type_id,
+        "value": value,
+        "value_formatted": formatted,
+        "activity_id": rec.get("activityId"),
+        "date": (str(date)[:10] if date else None),
+    }
+
+
+def _extract_stat_series(obj: Any, value_keys: tuple[str, ...]) -> list[dict]:
+    """Normalize a Garmin biometric-stats range payload to [{date, value}].
+
+    These range endpoints are undocumented and have been seen as either a bare
+    list of point dicts or a dict wrapping such a list. We look for a date-ish
+    and a value-ish key on each point and skip anything unrecognizable, so a
+    shape we didn't anticipate degrades to fewer/zero points rather than raising.
+    """
+    if isinstance(obj, dict):
+        # Unwrap the first list-valued field (e.g. {"lactateThresholdSpeed": [...]})
+        for v in obj.values():
+            if isinstance(v, list):
+                obj = v
+                break
+    if not isinstance(obj, list):
+        return []
+    date_keys = ("calendarDate", "date", "startDate", "timestamp")
+    points = []
+    for pt in obj:
+        if not isinstance(pt, dict):
+            continue
+        d = next((pt[k] for k in date_keys if pt.get(k)), None)
+        val = next((pt[k] for k in value_keys if pt.get(k) is not None), None)
+        if d is not None and val is not None:
+            points.append({"date": str(d)[:10], "value": val})
+    return points
+
+
+def _fmt_threshold_history(raw: dict) -> dict:
+    """Merge ranged lactate-threshold speed + HR into one dated trend series.
+
+    get_lactate_threshold(latest=False, ...) returns
+    {"speed": <series>, "heart_rate": <series>, "power": <series>}. We join
+    speed and HR by date into [{date, lthr_bpm, pace_per_km, ...}] so the
+    threshold trend reads as one timeline. If neither series parses, the raw
+    payload is returned under "raw" so nothing is silently dropped.
+    """
+    speed_pts = _extract_stat_series(raw.get("speed"), ("value", "speed"))
+    hr_pts = _extract_stat_series(raw.get("heart_rate"), ("value", "heartRate"))
+    if not speed_pts and not hr_pts:
+        return {"points": [], "raw": raw}
+    hr_by_date = {p["date"]: p["value"] for p in hr_pts}
+    speed_by_date = {p["date"]: p["value"] for p in speed_pts}
+    points = []
+    for d in sorted(set(hr_by_date) | set(speed_by_date)):
+        pace_str, pace_dec = _speed_to_pace(speed_by_date.get(d))
+        points.append({
+            "date": d,
+            "lthr_bpm": hr_by_date.get(d),
+            "pace_per_km": pace_str,
+            "pace_min_per_km": pace_dec,
+            "speed_m_s": round(speed_by_date[d], 3) if isinstance(speed_by_date.get(d), (int, float)) else None,
+        })
+    return {"points": points}
+
+
 @mcp.tool()
 def list_recent_activities(limit: int = 10) -> str:
     """List the most recent Garmin activities, newest first.
@@ -437,6 +536,44 @@ def get_performance_metrics(date: str | None = None) -> str:
             "vo2max": section(lambda: c.get_max_metrics(cdate), _fmt_vo2max),
             "race_predictions": section(c.get_race_predictions, _fmt_race_predictions),
         }
+
+    return _tool_call(build)
+
+
+@mcp.tool()
+def get_personal_records() -> str:
+    """Get the user's Garmin personal records (running PBs and bests).
+
+    Returns a JSON array, one object per record: `record` (human label for the
+    common running types — fastest 1km/1mile/5km/10km, longest run — or null
+    for other/unmapped types), `type_id` (Garmin's raw record type), `value`
+    (raw: seconds for time records, metres for distance), `value_formatted`
+    (clock string or "X.XX km" for mapped running types, else null),
+    `activity_id`, and `date`. The raw `type_id` and `value` are always kept so
+    an unmapped or non-running record is still usable, just unlabeled.
+    """
+    return _tool_call(lambda c: [_fmt_personal_record(r) for r in (c.get_personal_record() or []) if isinstance(r, dict)])
+
+
+@mcp.tool()
+def get_threshold_history(start_date: str, end_date: str, aggregation: str = "weekly") -> str:
+    """Get lactate-threshold heart rate + pace over time (the threshold trend).
+
+    `start_date` and `end_date` are "YYYY-MM-DD" (start no more than a year
+    before end). `aggregation` is one of "daily", "weekly" (default), "monthly",
+    "yearly". Returns a JSON object with "points": a dated series, each entry
+    giving `lthr_bpm` (threshold heart rate) and threshold pace (`pace_per_km`
+    "M:SS", decimal `pace_min_per_km`, raw `speed_m_s`). Use this to see whether
+    threshold HR/pace is trending up over a training block — for the single
+    latest value use get_performance_metrics instead. If Garmin's range payload
+    can't be parsed into a series it is returned verbatim under "raw".
+    """
+
+    def build(c: Garmin) -> dict:
+        raw = c.get_lactate_threshold(
+            latest=False, start_date=start_date, end_date=end_date, aggregation=aggregation
+        )
+        return _fmt_threshold_history(raw)
 
     return _tool_call(build)
 

@@ -7,6 +7,16 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- `get_personal_records()` — personal records / PBs. Labels the common running
+  records (fastest 1km/1mile/5km/10km, longest run) and formats their values
+  (clock string for time records, "X.XX km" for distance); any other/unmapped
+  record keeps its raw `type_id` and `value` with a null label so it is never
+  mislabeled.
+- `get_threshold_history(start_date, end_date, aggregation="weekly")` —
+  lactate-threshold heart rate + pace as a dated trend series (uses the ranged
+  `get_lactate_threshold`), for tracking whether threshold is improving across a
+  training block. Shape-tolerant: an unparseable range payload is returned
+  verbatim under `raw` rather than dropped.
 - `get_performance_metrics(date=None)` — running fitness/threshold snapshot in
   one call: lactate threshold (threshold heart rate + threshold pace, converted
   from Garmin's m/s to "M:SS/km"), VO2 max + fitness age, and 5k/10k/half/
