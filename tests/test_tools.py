@@ -97,6 +97,37 @@ class FakeClient:
             }
         ]
 
+    def get_lactate_threshold(self, latest=True):
+        return {
+            "speed_and_heart_rate": {
+                "calendarDate": "2026-07-15",
+                "speed": 4.31,  # m/s -> ~3:52/km
+                "heartRate": 173,
+            },
+            "power": {},
+        }
+
+    def get_max_metrics(self, cdate):
+        return [
+            {
+                "generic": {
+                    "calendarDate": cdate,
+                    "vo2MaxValue": 59.0,
+                    "vo2MaxPreciseValue": 59.2,
+                    "fitnessAge": 25,
+                }
+            }
+        ]
+
+    def get_race_predictions(self):
+        return {
+            "calendarDate": "2026-07-20",
+            "time5K": 1155,  # 19:15
+            "time10K": 2360,  # 39:20
+            "timeHalfMarathon": 5250,  # 1:27:30
+            "timeMarathon": 11100,  # 3:05:00
+        }
+
 
 def test_list_recent_activities_formats_and_strips(monkeypatch):
     monkeypatch.setattr(server, "get_client", lambda: FakeClient())
@@ -181,6 +212,58 @@ def test_get_body_battery_derives_highest_lowest(monkeypatch):
     assert result == [{"date": "2026-07-17", "charged": 69, "drained": 52, "highest": 77, "lowest": 14}]
 
 
+def test_get_performance_metrics_reshapes_all_sections(monkeypatch):
+    monkeypatch.setattr(server, "get_client", lambda: FakeClient())
+    result = json.loads(server.get_performance_metrics("2026-07-20"))
+
+    lt = result["lactate_threshold"]
+    assert lt["heart_rate_bpm"] == 173
+    assert lt["pace_per_km"] == "3:52"  # 1000/4.31 = 232.0s = 3:52
+    assert lt["pace_min_per_km"] == 3.87
+    assert lt["speed_m_s"] == 4.31
+    assert lt["measured_date"] == "2026-07-15"
+
+    vo2 = result["vo2max"]
+    assert vo2["value"] == 59.2
+    assert vo2["rounded_value"] == 59.0
+    assert vo2["fitness_age"] == 25
+
+    rp = result["race_predictions"]
+    assert rp["5k"] == "19:15"
+    assert rp["10k"] == "39:20"
+    assert rp["half_marathon"] == "1:27:30"
+    assert rp["marathon"] == "3:05:00"
+
+
+def test_get_performance_metrics_defaults_date_and_isolates_failures(monkeypatch):
+    class PartialClient(FakeClient):
+        def get_race_predictions(self):
+            raise RuntimeError("endpoint 500")
+
+    monkeypatch.setattr(server, "get_client", lambda: PartialClient())
+    result = json.loads(server.get_performance_metrics())  # no date -> today
+    # A dead endpoint is isolated; the healthy sections still resolve.
+    assert "error" in result["race_predictions"]
+    assert result["lactate_threshold"]["heart_rate_bpm"] == 173
+    assert result["vo2max"]["value"] == 59.2
+    assert result["as_of"]  # defaulted, non-empty
+
+
+def test_speed_to_pace_edge_cases():
+    assert server._speed_to_pace(0) == (None, None)
+    assert server._speed_to_pace(None) == (None, None)
+    # rounding carry: 3.3333 m/s -> 300.0s -> 5:00 exactly
+    pace_str, _ = server._speed_to_pace(1000 / 300)
+    assert pace_str == "5:00"
+
+
+def test_seconds_to_clock_formats():
+    assert server._seconds_to_clock(1155) == "19:15"
+    assert server._seconds_to_clock(11100) == "3:05:00"
+    assert server._seconds_to_clock(0) is None
+    assert server._seconds_to_clock(None) is None
+
+
 def test_tool_call_returns_json_error_on_failure(monkeypatch):
     def broken_client():
         raise RuntimeError("no auth configured")
@@ -200,3 +283,4 @@ def test_list_tools_exits_zero_without_network():
     assert proc.returncode == 0
     assert "list_recent_activities" in proc.stdout
     assert "get_training_status" in proc.stdout
+    assert "get_performance_metrics" in proc.stdout

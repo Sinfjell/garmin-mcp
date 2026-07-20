@@ -7,6 +7,14 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- `get_performance_metrics(date=None)` — running fitness/threshold snapshot in
+  one call: lactate threshold (threshold heart rate + threshold pace, converted
+  from Garmin's m/s to "M:SS/km"), VO2 max + fitness age, and 5k/10k/half/
+  marathon race predictions (converted from seconds to clock strings). Each of
+  the three sections is fetched independently, so one unavailable endpoint
+  becomes `{"error": ...}` while the others still return, and every section
+  carries its own `measured_date` so stale values are visible. Covers the
+  "prestasjons-/terskelhistorikk" item from the roadmap's Phase 3.
 - `get_activity_laps(activity_id, include_gps=False)` — per-lap breakdown
   (distance, elapsed/timer/moving durations, pace, avg/max HR, avg/max power,
   cadence, interval intensity, elevation). Enables interval and split
