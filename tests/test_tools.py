@@ -127,19 +127,22 @@ class FakeClient:
         ]
 
     def get_lactate_threshold(self, latest=True, start_date=None, end_date=None, aggregation="weekly"):
+        # Garmin reports threshold speed as m/s / 10 (LT_SPEED_SCALE), so these
+        # raw values are a tenth of the true m/s: 0.431 -> 4.31 m/s -> 3:52/km.
+        # The range payload keys the date under `from`, not calendarDate.
         if latest:
             return {
-                "speed_and_heart_rate": {"calendarDate": "2026-07-15", "speed": 4.31, "heartRate": 173},
+                "speed_and_heart_rate": {"calendarDate": "2026-07-15", "speed": 0.431, "heartRate": 173},
                 "power": {},
             }
         return {
             "speed": [
-                {"calendarDate": "2026-06-01", "value": 4.10},
-                {"calendarDate": "2026-07-01", "value": 4.31},
+                {"from": "2026-06-01", "until": "2026-06-07", "value": 0.410},
+                {"from": "2026-07-01", "until": "2026-07-07", "value": 0.431},
             ],
             "heart_rate": [
-                {"calendarDate": "2026-06-01", "value": 170},
-                {"calendarDate": "2026-07-01", "value": 173},
+                {"from": "2026-06-01", "until": "2026-06-07", "value": 170},
+                {"from": "2026-07-01", "until": "2026-07-07", "value": 173},
             ],
             "power": [],
         }
@@ -304,6 +307,48 @@ def test_threshold_history_falls_back_to_raw_on_unknown_shape():
     out = server._fmt_threshold_history(weird)
     assert out["points"] == []
     assert out["raw"] == weird
+
+
+def test_lactate_threshold_scales_raw_speed_to_running_pace():
+    # Regression for the pace unit bug: Garmin's threshold speed field is m/s / 10
+    # (LT_SPEED_SCALE). A raw 0.41666 is 4.1666 m/s = 4:00/km, NOT the walking-slow
+    # 40:00/km an unscaled pass-through would report. HR must NOT be scaled.
+    out = server._fmt_lactate_threshold(
+        {"speed_and_heart_rate": {"calendarDate": "2026-07-11", "speed": 0.41666, "heartRate": 172}}
+    )
+    assert out["heart_rate_bpm"] == 172
+    assert out["speed_m_s"] == 4.167  # 0.41666 * 10, rounded to 3dp
+    assert out["pace_per_km"] == "4:00"
+    assert 2.5 <= out["pace_min_per_km"] <= 8.0  # plausible running pace, never 40:00
+
+
+def test_lactate_threshold_handles_missing_speed():
+    out = server._fmt_lactate_threshold({"speed_and_heart_rate": {"heartRate": 170}})
+    assert out["heart_rate_bpm"] == 170
+    assert out["speed_m_s"] is None
+    assert out["pace_per_km"] is None
+    assert out["pace_min_per_km"] is None
+
+
+def test_threshold_history_parses_from_dated_range_and_scales(monkeypatch):
+    # The real range payload keys dates under `from` and reports raw (m/s / 10)
+    # speeds. Exercises both the `from` date-key parsing and the ×10 scaling.
+    class RangeClient(FakeClient):
+        def get_lactate_threshold(self, latest=True, start_date=None, end_date=None, aggregation="weekly"):
+            return {
+                "speed": [{"from": "2026-04-07", "until": "2026-04-13", "value": 0.38888}],
+                "heart_rate": [{"from": "2026-04-07", "until": "2026-04-13", "value": 166}],
+                "power": [{"from": "2026-04-07", "until": "2026-04-13", "value": 438}],
+            }
+
+    monkeypatch.setattr(server, "get_client", lambda: RangeClient())
+    pts = json.loads(server.get_threshold_history("2026-04-01", "2026-04-30"))["points"]
+    assert len(pts) == 1
+    assert pts[0]["date"] == "2026-04-07"  # parsed from the `from` key
+    assert pts[0]["lthr_bpm"] == 166
+    assert pts[0]["speed_m_s"] == 3.889  # 0.38888 * 10
+    assert pts[0]["pace_per_km"] == "4:17"  # 1000 / 3.8888 = 257.1s
+    assert 2.5 <= pts[0]["pace_min_per_km"] <= 8.0
 
 
 def test_speed_to_pace_edge_cases():

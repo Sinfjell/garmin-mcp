@@ -19,7 +19,7 @@ All notable changes to this project are documented here. Format follows
   verbatim under `raw` rather than dropped.
 - `get_performance_metrics(date=None)` — running fitness/threshold snapshot in
   one call: lactate threshold (threshold heart rate + threshold pace, converted
-  from Garmin's m/s to "M:SS/km"), VO2 max + fitness age, and 5k/10k/half/
+  from Garmin's scaled speed field to "M:SS/km"), VO2 max + fitness age, and 5k/10k/half/
   marathon race predictions (converted from seconds to clock strings). Each of
   the three sections is fetched independently, so one unavailable endpoint
   becomes `{"error": ...}` while the others still return, and every section
@@ -33,3 +33,16 @@ All notable changes to this project are documented here. Format follows
 - `get_activity_details` now includes an explicit `timing` object
   (`elapsed_time_s` / `timer_time_s` / `moving_time_s` / `stopped_time_s`) so
   callers no longer have to guess which duration is the finish time.
+
+### Fixed
+- Threshold pace was reported ~10× too slow (e.g. `40:00/km` instead of
+  `4:00/km`) in `get_performance_metrics` and `get_threshold_history`. Garmin's
+  lactate-threshold endpoints report speed in units of 10 m/s (true m/s ÷ 10),
+  unlike activity `averageSpeed` which is plain m/s; the raw value is now scaled
+  by `LT_SPEED_SCALE` before pace conversion. Threshold HR and power are
+  unaffected. Verified against a same-day track session whose activity
+  `averageSpeed` matched the raw threshold speed × 10.
+- `get_threshold_history` returned an empty `points` list (falling back to
+  `raw`) because the ranged payload keys each point's date under `from`, which
+  `_extract_stat_series` did not recognize. `from` is now an accepted date key,
+  so the trend series populates correctly.
