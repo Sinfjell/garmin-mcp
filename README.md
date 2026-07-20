@@ -15,6 +15,8 @@ Connect Claude (or any MCP client) to your Garmin Connect data — activities, s
 - "Summarize my training status and VO2 max trend."
 - "What's my lactate threshold heart rate and pace right now?"
 - "What 10k time does Garmin predict for me?"
+- "What are my running personal records?"
+- "Has my threshold pace improved over the last three months?"
 
 ## Quick Start
 
@@ -80,6 +82,8 @@ Restart your client and ask something like "How did I sleep last night?"
 | `get_body_battery(start_date, end_date)` | Body Battery charged/drained/highest/lowest per day |
 | `get_training_status(date)` | Training status, load, VO2 max, heat/altitude acclimation |
 | `get_performance_metrics(date=None)` | Running fitness/threshold snapshot: lactate threshold (LTHR + pace), VO2 max + fitness age, and 5k/10k/half/marathon race predictions |
+| `get_personal_records()` | Personal records / PBs: fastest 1km/1mile/5km/10km, longest run (labeled), plus raw type/value for any other record |
+| `get_threshold_history(start_date, end_date, aggregation="weekly")` | Lactate-threshold HR + pace as a dated trend series over a range |
 
 All dates are `"YYYY-MM-DD"`. All tools return compact JSON.
 

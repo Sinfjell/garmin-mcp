@@ -97,16 +97,6 @@ class FakeClient:
             }
         ]
 
-    def get_lactate_threshold(self, latest=True):
-        return {
-            "speed_and_heart_rate": {
-                "calendarDate": "2026-07-15",
-                "speed": 4.31,  # m/s -> ~3:52/km
-                "heartRate": 173,
-            },
-            "power": {},
-        }
-
     def get_max_metrics(self, cdate):
         return [
             {
@@ -126,6 +116,32 @@ class FakeClient:
             "time10K": 2360,  # 39:20
             "timeHalfMarathon": 5250,  # 1:27:30
             "timeMarathon": 11100,  # 3:05:00
+        }
+
+    def get_personal_record(self):
+        return [
+            {"typeId": 4, "value": 2338.0, "activityId": 999, "prStartTimeGmtFormatted": "2026-07-11T18:00:00.0"},  # 10k 38:58
+            {"typeId": 3, "value": 1155.0, "activityId": 998, "prStartTimeGmt": "2026-06-01T10:00:00.0"},  # 5k 19:15
+            {"typeId": 7, "value": 17120.0, "activityId": 997, "prStartTimeGmtFormatted": "2026-06-20T09:00:00.0"},  # longest run 17.12 km
+            {"typeId": 99, "value": 12345.0, "activityId": 996},  # unknown type -> unlabeled
+        ]
+
+    def get_lactate_threshold(self, latest=True, start_date=None, end_date=None, aggregation="weekly"):
+        if latest:
+            return {
+                "speed_and_heart_rate": {"calendarDate": "2026-07-15", "speed": 4.31, "heartRate": 173},
+                "power": {},
+            }
+        return {
+            "speed": [
+                {"calendarDate": "2026-06-01", "value": 4.10},
+                {"calendarDate": "2026-07-01", "value": 4.31},
+            ],
+            "heart_rate": [
+                {"calendarDate": "2026-06-01", "value": 170},
+                {"calendarDate": "2026-07-01", "value": 173},
+            ],
+            "power": [],
         }
 
 
@@ -249,6 +265,47 @@ def test_get_performance_metrics_defaults_date_and_isolates_failures(monkeypatch
     assert result["as_of"]  # defaulted, non-empty
 
 
+def test_get_personal_records_labels_known_and_preserves_unknown(monkeypatch):
+    monkeypatch.setattr(server, "get_client", lambda: FakeClient())
+    result = json.loads(server.get_personal_records())
+    by_type = {r["type_id"]: r for r in result}
+
+    tenk = by_type[4]
+    assert tenk["record"] == "fastest_10km"
+    assert tenk["value_formatted"] == "38:58"  # 2338s
+    assert tenk["date"] == "2026-07-11"
+    assert tenk["activity_id"] == 999
+
+    longest = by_type[7]
+    assert longest["record"] == "longest_run"
+    assert longest["value_formatted"] == "17.12 km"
+
+    # Unknown type is preserved with raw value, never mislabeled
+    unknown = by_type[99]
+    assert unknown["record"] is None
+    assert unknown["value"] == 12345.0
+    assert unknown["value_formatted"] is None
+
+
+def test_get_threshold_history_merges_series(monkeypatch):
+    monkeypatch.setattr(server, "get_client", lambda: FakeClient())
+    result = json.loads(server.get_threshold_history("2026-06-01", "2026-07-01"))
+    pts = result["points"]
+    assert len(pts) == 2
+    assert pts[0]["date"] == "2026-06-01"
+    assert pts[0]["lthr_bpm"] == 170
+    assert pts[1]["date"] == "2026-07-01"
+    assert pts[1]["lthr_bpm"] == 173
+    assert pts[1]["pace_per_km"] == "3:52"  # speed 4.31 m/s
+
+
+def test_threshold_history_falls_back_to_raw_on_unknown_shape():
+    weird = {"speed": "nope", "heart_rate": None, "power": []}
+    out = server._fmt_threshold_history(weird)
+    assert out["points"] == []
+    assert out["raw"] == weird
+
+
 def test_speed_to_pace_edge_cases():
     assert server._speed_to_pace(0) == (None, None)
     assert server._speed_to_pace(None) == (None, None)
@@ -284,3 +341,5 @@ def test_list_tools_exits_zero_without_network():
     assert "list_recent_activities" in proc.stdout
     assert "get_training_status" in proc.stdout
     assert "get_performance_metrics" in proc.stdout
+    assert "get_personal_records" in proc.stdout
+    assert "get_threshold_history" in proc.stdout
