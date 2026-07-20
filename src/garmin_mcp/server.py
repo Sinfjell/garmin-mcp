@@ -8,6 +8,7 @@ import argparse
 import asyncio
 import json
 import os
+from datetime import date as _date
 from pathlib import Path
 from typing import Any, Callable
 
@@ -171,6 +172,92 @@ def _fmt_body_battery_day(item: dict) -> dict:
     }
 
 
+def _speed_to_pace(speed_m_s: Any) -> tuple[str | None, float | None]:
+    """Convert a running speed in m/s to (formatted "M:SS/km", decimal min/km).
+
+    Garmin reports threshold and activity speed in metres per second. Runners
+    think in pace, so we surface a human "3:52" string (primary) alongside the
+    decimal min/km used elsewhere in this server. Returns (None, None) for a
+    zero/missing/non-numeric speed.
+    """
+    if not isinstance(speed_m_s, (int, float)) or speed_m_s <= 0:
+        return None, None
+    secs_per_km = 1000.0 / speed_m_s
+    minutes = int(secs_per_km // 60)
+    seconds = int(round(secs_per_km - minutes * 60))
+    if seconds == 60:  # rounding carry, e.g. 3:60 -> 4:00
+        minutes += 1
+        seconds = 0
+    return f"{minutes}:{seconds:02d}", round(secs_per_km / 60, 2)
+
+
+def _seconds_to_clock(secs: Any) -> str | None:
+    """Format a duration in seconds as "H:MM:SS" (or "M:SS" under an hour)."""
+    if not isinstance(secs, (int, float)) or secs <= 0:
+        return None
+    secs = int(round(secs))
+    hours, rem = divmod(secs, 3600)
+    minutes, seconds = divmod(rem, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
+
+
+def _fmt_lactate_threshold(raw: dict) -> dict:
+    """Reshape get_lactate_threshold(latest=True) into HR + pace.
+
+    The library returns {"speed_and_heart_rate": {...}, "power": {...}}. The
+    threshold heart rate (LTHR) and threshold speed are what a runner uses to
+    set zones, so we surface those plus a formatted pace. Speed is m/s.
+    """
+    shr = raw.get("speed_and_heart_rate") or {}
+    pace_str, pace_dec = _speed_to_pace(shr.get("speed"))
+    return {
+        "heart_rate_bpm": shr.get("heartRate"),
+        "pace_per_km": pace_str,
+        "pace_min_per_km": pace_dec,
+        "speed_m_s": round(shr["speed"], 3) if isinstance(shr.get("speed"), (int, float)) else None,
+        "measured_date": shr.get("calendarDate"),
+    }
+
+
+def _fmt_vo2max(raw: Any) -> dict:
+    """Extract VO2max + fitness age from get_max_metrics.
+
+    The endpoint returns a list of daily entries (or a single dict); the
+    running value lives under the "generic" block. preciseValue keeps the
+    decimal (59.2) that the rounded value (59) throws away.
+    """
+    entry = raw[0] if isinstance(raw, list) and raw else raw
+    generic = (entry or {}).get("generic") if isinstance(entry, dict) else None
+    generic = generic or {}
+    precise = generic.get("vo2MaxPreciseValue")
+    value = generic.get("vo2MaxValue")
+    return {
+        "value": round(precise, 1) if isinstance(precise, (int, float)) else value,
+        "rounded_value": value,
+        "fitness_age": generic.get("fitnessAge"),
+        "measured_date": generic.get("calendarDate"),
+    }
+
+
+# Garmin race-predictor times are seconds; field names are stable across the
+# community API. Order preserved for readable output (short → long).
+_RACE_FIELDS = (("5k", "time5K"), ("10k", "time10K"), ("half_marathon", "timeHalfMarathon"), ("marathon", "timeMarathon"))
+
+
+def _fmt_race_predictions(raw: Any) -> dict:
+    """Reshape race predictions into 5k/10k/HM/marathon as clock strings."""
+    entry = raw[-1] if isinstance(raw, list) and raw else raw
+    if not isinstance(entry, dict):
+        return {"error": "unexpected race-prediction shape"}
+    out: dict[str, Any] = {}
+    for label, field in _RACE_FIELDS:
+        out[label] = _seconds_to_clock(entry.get(field))
+    out["measured_date"] = entry.get("calendarDate")
+    return out
+
+
 @mcp.tool()
 def list_recent_activities(limit: int = 10) -> str:
     """List the most recent Garmin activities, newest first.
@@ -312,6 +399,46 @@ def get_training_status(date: str) -> str:
     mostRecentVO2Max, and heatAltitudeAcclimationDTO.
     """
     return _tool_call(lambda c: c.get_training_status(date))
+
+
+@mcp.tool()
+def get_performance_metrics(date: str | None = None) -> str:
+    """Get current running fitness/threshold snapshot: lactate threshold, VO2 max, race predictions.
+
+    Answers "where is my fitness right now?" in one call. `date` is optional
+    ("YYYY-MM-DD", defaults to today) and only affects which day's VO2 max is
+    read; lactate threshold and race predictions always return Garmin's latest
+    available values. Returns a JSON object with three independent sections:
+
+    - "lactate_threshold": threshold heart rate (LTHR, bpm) and threshold pace
+      ("M:SS/km" plus decimal min/km and raw m/s) — the numbers used to set
+      training zones. (Garmin's "heart rate threshold" and "lactate threshold"
+      are the same value.)
+    - "vo2max": VO2 max (decimal precise value + rounded) and fitness age.
+    - "race_predictions": predicted 5k / 10k / half-marathon / marathon finish
+      times as clock strings.
+
+    Each section is fetched independently: if one Garmin endpoint is
+    unavailable it becomes {"error": ...} while the others still return. Every
+    section carries its own "measured_date" so stale values are visible.
+    """
+    cdate = date or _date.today().isoformat()
+
+    def build(c: Garmin) -> dict:
+        def section(fetch: Callable[[], Any], fmt: Callable[[Any], dict]) -> dict:
+            try:
+                return fmt(fetch())
+            except Exception as exc:  # noqa: BLE001 - one dead endpoint shouldn't sink the others
+                return {"error": f"unavailable: {exc}"}
+
+        return {
+            "as_of": cdate,
+            "lactate_threshold": section(lambda: c.get_lactate_threshold(latest=True), _fmt_lactate_threshold),
+            "vo2max": section(lambda: c.get_max_metrics(cdate), _fmt_vo2max),
+            "race_predictions": section(c.get_race_predictions, _fmt_race_predictions),
+        }
+
+    return _tool_call(build)
 
 
 def _print_tool_list() -> None:

@@ -13,6 +13,8 @@ Connect Claude (or any MCP client) to your Garmin Connect data — activities, s
 - "Is my resting heart rate trending down?"
 - "Should I train hard today based on my body battery?"
 - "Summarize my training status and VO2 max trend."
+- "What's my lactate threshold heart rate and pace right now?"
+- "What 10k time does Garmin predict for me?"
 
 ## Quick Start
 
@@ -77,6 +79,7 @@ Restart your client and ask something like "How did I sleep last night?"
 | `get_heart_rate(date)` | Min/max/resting HR and 7-day average resting HR for one day |
 | `get_body_battery(start_date, end_date)` | Body Battery charged/drained/highest/lowest per day |
 | `get_training_status(date)` | Training status, load, VO2 max, heat/altitude acclimation |
+| `get_performance_metrics(date=None)` | Running fitness/threshold snapshot: lactate threshold (LTHR + pace), VO2 max + fitness age, and 5k/10k/half/marathon race predictions |
 
 All dates are `"YYYY-MM-DD"`. All tools return compact JSON.
 
