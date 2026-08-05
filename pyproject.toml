@@ -20,7 +20,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest",
-    "ruff",
+    # Pinned: ruff's default rule set grows on every minor release, which turns
+    # CI red on untouched code. Bump deliberately, together with the fixes the
+    # new rules ask for.
+    "ruff==0.16.1",
 ]
 
 [project.scripts]

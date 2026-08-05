@@ -8,9 +8,12 @@ import argparse
 import asyncio
 import json
 import os
+from collections.abc import Callable
 from datetime import date as _date
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from garminconnect import Garmin, GarminConnectAuthenticationError
 from mcp.server.fastmcp import FastMCP
@@ -19,11 +22,27 @@ mcp = FastMCP("garmin")
 
 _client: Garmin | None = None
 
+# "Today" always means the user's local calendar day, but this server may run on
+# a UTC host. Resolving in UTC would push a late-evening session onto the next
+# day's date, so anchor date defaults to Europe/Oslo.
+_LOCAL_TZ_NAME = "Europe/Oslo"
+
 _AUTH_HELP = (
     "No Garmin session available. Run `garmin-mcp-auth` once to log in "
     "(supports MFA), or set GARMIN_EMAIL and GARMIN_PASSWORD environment "
     "variables for non-interactive login."
 )
+
+
+def _today_local() -> _date:
+    """Today's date in Europe/Oslo, regardless of the host clock's timezone.
+
+    Falls back to the host's own local date if the system has no tz database.
+    """
+    try:
+        return datetime.now(ZoneInfo(_LOCAL_TZ_NAME)).date()
+    except ZoneInfoNotFoundError:
+        return datetime.now(timezone.utc).astimezone().date()
 
 
 def _token_store() -> str:
@@ -184,7 +203,7 @@ def _speed_to_pace(speed_m_s: Any) -> tuple[str | None, float | None]:
         return None, None
     secs_per_km = 1000.0 / speed_m_s
     minutes = int(secs_per_km // 60)
-    seconds = int(round(secs_per_km - minutes * 60))
+    seconds = round(secs_per_km - minutes * 60)
     if seconds == 60:  # rounding carry, e.g. 3:60 -> 4:00
         minutes += 1
         seconds = 0
@@ -213,7 +232,7 @@ def _seconds_to_clock(secs: Any) -> str | None:
     """Format a duration in seconds as "H:MM:SS" (or "M:SS" under an hour)."""
     if not isinstance(secs, (int, float)) or secs <= 0:
         return None
-    secs = int(round(secs))
+    secs = round(secs)
     hours, rem = divmod(secs, 3600)
     minutes, seconds = divmod(rem, 60)
     if hours:
@@ -542,7 +561,7 @@ def get_performance_metrics(date: str | None = None) -> str:
     unavailable it becomes {"error": ...} while the others still return. Every
     section carries its own "measured_date" so stale values are visible.
     """
-    cdate = date or _date.today().isoformat()
+    cdate = date or _today_local().isoformat()
 
     def build(c: Garmin) -> dict:
         def section(fetch: Callable[[], Any], fmt: Callable[[Any], dict]) -> dict:
