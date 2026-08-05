@@ -6,6 +6,7 @@ client that returns canned data shaped like real garminconnect responses.
 import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 
 from garmin_mcp import server
 
@@ -254,6 +255,20 @@ def test_get_performance_metrics_reshapes_all_sections(monkeypatch):
     assert rp["marathon"] == "3:05:00"
 
 
+def test_today_local_resolves_in_oslo_not_utc(monkeypatch):
+    """23:30 UTC in summer is already the next day in Oslo (UTC+2)."""
+    instant = datetime(2026, 8, 5, 23, 30, tzinfo=timezone.utc)
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return instant.astimezone(tz)
+
+    monkeypatch.setattr(server, "datetime", FrozenDatetime)
+    assert instant.date().isoformat() == "2026-08-05"  # what a UTC host would report
+    assert server._today_local().isoformat() == "2026-08-06"
+
+
 def test_get_performance_metrics_defaults_date_and_isolates_failures(monkeypatch):
     class PartialClient(FakeClient):
         def get_race_predictions(self):
@@ -381,6 +396,7 @@ def test_list_tools_exits_zero_without_network():
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
     assert proc.returncode == 0
     assert "list_recent_activities" in proc.stdout

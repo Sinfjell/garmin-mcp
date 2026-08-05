@@ -35,6 +35,18 @@ All notable changes to this project are documented here. Format follows
   callers no longer have to guess which duration is the finish time.
 
 ### Fixed
+- `get_performance_metrics()` resolved its default date from the *host's*
+  timezone, so on a UTC server every session logged after 22:00 Norwegian time
+  (23:00 in winter) was attributed to the previous day. "Today" is now resolved
+  in `Europe/Oslo`, with a fallback to the host's local date if the system has
+  no tz database.
+- CI was red on every branch, including untouched `main`: `ruff` was declared
+  without a version, and 0.16.1 widened the default rule set to flag five
+  pre-existing violations. `ruff` is now pinned to `==0.16.1` and the five
+  violations are fixed (`UP035` `Callable` import, two redundant `int(round(…))`
+  casts, `DTZ011` above, `PLW1510` explicit `check=False` in a test). Same root
+  cause as the `mcp[cli]` incident: an unpinned tool breaking on its own release
+  schedule.
 - Server failed to start with `ModuleNotFoundError: No module named
   'mcp.server.fastmcp'` after the MCP SDK released 2.0.0, which removed that
   module. The `mcp[cli]` dependency was declared without a version ceiling, so
