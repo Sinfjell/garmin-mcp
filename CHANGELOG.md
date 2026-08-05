@@ -35,6 +35,12 @@ All notable changes to this project are documented here. Format follows
   callers no longer have to guess which duration is the finish time.
 
 ### Fixed
+- Server failed to start with `ModuleNotFoundError: No module named
+  'mcp.server.fastmcp'` after the MCP SDK released 2.0.0, which removed that
+  module. The `mcp[cli]` dependency was declared without a version ceiling, so
+  any fresh dependency resolution silently pulled the incompatible major
+  version — taking down long-running installs on their next restart. Now pinned
+  to `>=1.0,<2`. Lift the ceiling only together with a port to the 2.x API.
 - Threshold pace was reported ~10× too slow (e.g. `40:00/km` instead of
   `4:00/km`) in `get_performance_metrics` and `get_threshold_history`. Garmin's
   lactate-threshold endpoints report speed in units of 10 m/s (true m/s ÷ 10),
