@@ -29,7 +29,7 @@ from garminconnect import (
     GarminConnectTooManyRequestsError,
 )
 
-from garmin_mcp.onboarding import pages
+from garmin_mcp.onboarding import logging_guard, pages
 from garmin_mcp.onboarding.store import SessionStore, new_user_id, write_token_store
 
 logger = logging.getLogger(__name__)
@@ -144,6 +144,17 @@ def create_app(
 
     @app.post("/start", response_class=HTMLResponse)
     def start(email: str = Form(...), password: str = Form(...)) -> HTMLResponse:
+        # Bound only for this call: any log record from anywhere — including
+        # third-party code we do not control — gets this string redacted while
+        # it is in flight. See logging_guard for why that is worth having even
+        # though nothing here logs it deliberately.
+        held = logging_guard.hold_password(password)
+        try:
+            return _start(email, password)
+        finally:
+            logging_guard.release_password(held)
+
+    def _start(email: str, password: str) -> HTMLResponse:
         try:
             client, status, state = start_login(email, password)
         except GarminConnectTooManyRequestsError:
@@ -195,4 +206,5 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
+    logging_guard.install()
     uvicorn.run(create_app(), host=args.host, port=args.port, log_level="info")
