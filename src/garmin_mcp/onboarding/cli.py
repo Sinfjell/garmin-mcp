@@ -7,14 +7,25 @@ A command run on the host keeps deletion behind SSH, and "how do I delete this"
 becomes a documented, auditable step instead of a button.
 
     garmin-mcp-tenant list
+    garmin-mcp-tenant import ~/from-her/.garminconnect
     garmin-mcp-tenant delete <user-id>
+
+`import` exists because Garmin will not always let a server log in: Cloudflare
+blocks the only working login strategy from datacenter IPs. The person then
+authenticates on their own machine — where their IP is fine and their password
+never leaves — and only the token comes here. This turns that into one command
+instead of mkdir/cp/chmod and a hand-made ID.
 """
 import argparse
+import os
 import sys
 from pathlib import Path
 
 from garmin_mcp import multitenant
-from garmin_mcp.onboarding.store import delete_token_store, list_user_ids
+from garmin_mcp.onboarding.store import delete_token_store, import_token_store, list_user_ids
+
+CONNECTOR_BASE_URL_ENV = "GARMIN_CONNECTOR_BASE_URL"
+CONNECTOR_PREFIX_ENV = "GARMIN_CONNECTOR_PREFIX"
 
 
 def _root(explicit: str | None) -> Path:
@@ -35,6 +46,13 @@ def main(argv: list[str] | None = None) -> None:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("list", help="List user IDs that have a token store")
+    imp = sub.add_parser(
+        "import", help="Adopt an existing ~/.garminconnect directory as a new tenant"
+    )
+    imp.add_argument("source", help="Directory holding that person's Garmin tokens")
+    imp.add_argument(
+        "--user-id", default=None, help="Use this ID instead of generating one (rarely wanted)"
+    )
     delete = sub.add_parser("delete", help="Delete one user's token store")
     delete.add_argument("user_id")
 
@@ -46,6 +64,24 @@ def main(argv: list[str] | None = None) -> None:
         for user_id in ids:
             print(user_id)
         print(f"{len(ids)} token store(s) in {root}", file=sys.stderr)
+        return
+
+    if args.command == "import":
+        try:
+            user_id = import_token_store(Path(args.source).expanduser(), root, args.user_id)
+        except ValueError as exc:
+            sys.exit(str(exc))
+        base = os.environ.get(CONNECTOR_BASE_URL_ENV, "").rstrip("/")
+        prefix = os.environ.get(CONNECTOR_PREFIX_ENV, "/u").strip("/")
+        print(f"Imported as {user_id}")
+        if base:
+            print(f"{base}/{prefix}/{user_id}/mcp")
+        else:
+            print(
+                f"Set ${CONNECTOR_BASE_URL_ENV} to have the full URL printed; "
+                f"the path is /{prefix}/{user_id}/mcp",
+                file=sys.stderr,
+            )
         return
 
     try:

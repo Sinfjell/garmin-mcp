@@ -6,6 +6,15 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- `garmin-mcp-tenant import <dir>` — adopt an existing `~/.garminconnect`
+  directory as a new tenant, printing the finished connector URL. This is the
+  route when Garmin refuses to let a server log in at all: Cloudflare blocks the
+  only working login strategy from datacenter IPs, so the person authenticates
+  on their own machine — where their IP is fine and their password never leaves
+  — and only the token travels. Copies rather than moves, and clamps the
+  directory to 0700 and the token to 0600.
+
 ### Changed
 - Onboarding no longer retries a rate-limited Garmin login by default.
   garminconnect already tries five strategies with its own Cloudflare backoff

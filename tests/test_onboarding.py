@@ -413,6 +413,61 @@ def test_missing_base_url_fails_at_startup(root):
         create_app(root=root, base_url="productivitytech.io", garmin_factory=FakeGarmin)
 
 
+def test_import_adopts_a_token_directory_from_another_machine(root, tmp_path, capsys, monkeypatch):
+    """The path that matters when Garmin refuses to let the server log in."""
+    source = tmp_path / "her-garminconnect"
+    source.mkdir()
+    (source / "oauth2_token.json").write_text(json.dumps({"refresh_token": "hers"}))
+
+    monkeypatch.setenv("GARMIN_CONNECTOR_BASE_URL", "https://productivitytech.io")
+    monkeypatch.setenv("GARMIN_CONNECTOR_PREFIX", "/garmin-u")
+    tenants.main(["--root", str(root), "import", str(source)])
+    printed = capsys.readouterr().out
+
+    user_id = onboarding_store.list_user_ids(root)[0]
+    # The ID it minted is one the MCP server will route, and the URL is complete.
+    assert multitenant.is_valid_user_id(user_id)
+    assert multitenant.resolve_token_store(root, user_id) == root / user_id
+    assert f"https://productivitytech.io/garmin-u/{user_id}/mcp" in printed
+
+    # The token is the account: owner-only, and the source is left untouched.
+    assert (root / user_id / "oauth2_token.json").read_text() == source.joinpath(
+        "oauth2_token.json"
+    ).read_text()
+    assert (root / user_id).stat().st_mode & 0o777 == 0o700
+    assert (root / user_id / "oauth2_token.json").stat().st_mode & 0o777 == 0o600
+    assert source.is_dir()
+
+
+def test_import_refuses_a_directory_that_is_not_a_token_store(root, tmp_path):
+    empty = tmp_path / "tomt"
+    empty.mkdir()
+    (empty / "notes.txt").write_text("ikke tokens")
+    with pytest.raises(ValueError, match="does not look like"):
+        onboarding_store.import_token_store(empty, root)
+    with pytest.raises(ValueError):
+        onboarding_store.import_token_store(tmp_path / "finnes-ikke", root)
+    assert onboarding_store.list_user_ids(root) == []
+
+
+def test_import_will_not_overwrite_an_existing_tenant(root, tmp_path):
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "oauth2_token.json").write_text("{}")
+    user_id = "f" * 40
+    onboarding_store.import_token_store(source, root, user_id)
+    with pytest.raises(ValueError, match="already exists"):
+        onboarding_store.import_token_store(source, root, user_id)
+
+
+def test_import_refuses_an_invalid_id(root, tmp_path):
+    source = tmp_path / "src2"
+    source.mkdir()
+    (source / "oauth2_token.json").write_text("{}")
+    with pytest.raises(ValueError, match="valid user ID"):
+        onboarding_store.import_token_store(source, root, "../etc")
+
+
 def test_delete_refuses_an_invalid_id(root):
     root.mkdir(parents=True, exist_ok=True)
     with pytest.raises(ValueError):

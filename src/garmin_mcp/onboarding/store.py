@@ -62,6 +62,47 @@ def delete_token_store(root: Path, user_id: str) -> bool:
     return True
 
 
+# What garminconnect's dump() leaves behind. Used to recognise a directory
+# someone hands us as a token store, rather than trusting the path.
+_TOKEN_FILE_SUFFIX = ".json"
+
+
+def looks_like_token_store(source: Path) -> bool:
+    """Whether a directory looks like something garminconnect wrote."""
+    return source.is_dir() and any(
+        p.is_file() and p.name.endswith(_TOKEN_FILE_SUFFIX) for p in source.iterdir()
+    )
+
+
+def import_token_store(source: Path, root: Path, user_id: str | None = None) -> str:
+    """Adopt an existing ~/.garminconnect directory as a new tenant.
+
+    The path that matters when Garmin refuses to let a server log in: the person
+    authenticates on their own machine, where their IP is not blocked and their
+    password never leaves, and only the resulting token comes here.
+
+    Returns the new user ID. Copies rather than moves, so a mistake costs
+    nothing, and clamps permissions afterwards — the token is the account.
+    """
+    if not looks_like_token_store(source):
+        raise ValueError(f"{source} does not look like a Garmin token store (no .json files).")
+    user_id = user_id or new_user_id()
+    if not multitenant.is_valid_user_id(user_id):
+        raise ValueError(f"Not a valid user ID: {user_id!r}")
+
+    destination = multitenant.user_store_path(root, user_id)
+    if destination.exists():
+        raise ValueError(f"A token store already exists for {user_id}.")
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    shutil.copytree(source, destination)
+
+    destination.chmod(0o700)
+    for path in destination.rglob("*"):
+        if path.is_file():
+            path.chmod(0o600)
+    return user_id
+
+
 def list_user_ids(root: Path) -> list[str]:
     """Every user ID with a token store under `root`, sorted."""
     if not root.is_dir():
