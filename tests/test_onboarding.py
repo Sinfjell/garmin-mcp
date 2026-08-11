@@ -15,7 +15,8 @@ from garminconnect import (
     GarminConnectTooManyRequestsError,
 )
 
-from garmin_mcp import multitenant, tenants
+from garmin_mcp import multitenant
+from garmin_mcp.onboarding import cli as tenants
 from garmin_mcp.onboarding import store as onboarding_store
 from garmin_mcp.onboarding.app import create_app
 
@@ -222,11 +223,11 @@ def test_bad_credentials_are_reported_without_a_store(client, root):
     assert onboarding_store.list_user_ids(root) == []
 
 
-def test_rate_limit_is_retried_with_backoff(client, slept, root):
-    FakeGarmin.rate_limit_times = 2
+def test_rate_limit_is_retried_after_a_real_pause(client, slept, root):
+    FakeGarmin.rate_limit_times = 1
     response = _start(client)
     assert response.status_code == 200
-    assert slept == [2.0, 4.0]  # exponential, and it did wait
+    assert slept == [5.0]
     assert len(onboarding_store.list_user_ids(root)) == 1
 
 
@@ -235,7 +236,10 @@ def test_persistent_rate_limit_gives_up_politely(client, slept, root):
     response = _start(client)
     assert response.status_code == 429
     assert "for mange forsøk" in response.text
-    assert len(slept) == 2  # three attempts, two waits
+    # One retry, not a loop: each attempt already costs five SSO hits inside
+    # garminconnect, so hammering would deepen the block instead of lifting it.
+    assert len(FakeGarmin.instances) == 2
+    assert len(slept) == 1
     assert onboarding_store.list_user_ids(root) == []
 
 
@@ -258,6 +262,32 @@ def test_password_is_never_logged(client, caplog):
         _start(client)
     assert PASSWORD not in caplog.text
     assert EMAIL not in caplog.text
+
+
+def test_a_failing_client_cannot_leak_the_password_into_the_log(client, caplog, monkeypatch):
+    """The unexpected-failure branch is the one that logs — so break it on purpose.
+
+    An HTTP client that echoes the request it sent puts the password inside the
+    exception message. If that branch ever logs the exception itself, this test
+    fails; asserting only on the tidy paths would let the leak through.
+    """
+    leaky = RuntimeError(f"POST /sso failed: email={EMAIL}&password={PASSWORD}")
+
+    def explode(self, tokenstore=None):
+        raise leaky
+
+    monkeypatch.setattr(FakeGarmin, "login", explode)
+
+    with caplog.at_level(logging.DEBUG):
+        response = _start(client)
+
+    assert response.status_code == 502
+    assert caplog.records, "the failure must still be recorded, just not verbatim"
+    assert PASSWORD not in caplog.text
+    assert EMAIL not in caplog.text
+    assert "RuntimeError" in caplog.text  # the type survives; the message does not
+    # And the user is not shown the raw failure either.
+    assert PASSWORD not in response.text
 
 
 def test_password_is_dropped_from_client_state_before_the_mfa_wait(client, app):
@@ -288,6 +318,50 @@ def test_delete_removes_the_store_and_unroutes_the_url(client, root):
     # Now indistinguishable from an ID that never existed -> the server 404s it.
     assert multitenant.resolve_token_store(root, user_id) is None
     assert onboarding_store.delete_token_store(root, user_id) is False
+
+
+def test_concurrent_mfa_posts_do_not_crash_the_store(root, clock):
+    """Two people finishing at once, with expired sessions in the way.
+
+    FastAPI runs these endpoints in a worker threadpool, so this is real
+    concurrency, not a hypothetical. An unguarded purge-then-delete raises
+    KeyError on the loser and returns a 500.
+    """
+    import threading
+
+    store = onboarding_store.SessionStore(ttl_seconds=300, clock=clock)
+    live = [store.add(object(), None) for _ in range(50)]
+    clock.now += 301  # every session is now expired
+    fresh = [store.add(object(), None) for _ in range(50)]
+
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(8)
+
+    def worker(ids):
+        barrier.wait()
+        try:
+            for session_id in ids:
+                store.pop(session_id)
+                len(store)
+        except BaseException as exc:  # noqa: BLE001 - the point is to catch anything
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(live + fresh,)) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    assert len(store) == 0
+
+
+def test_missing_base_url_fails_at_startup(root):
+    """Better to refuse to boot than to hand someone a relative path."""
+    with pytest.raises(RuntimeError, match="GARMIN_CONNECTOR_BASE_URL"):
+        create_app(root=root, base_url="", garmin_factory=FakeGarmin)
+    with pytest.raises(RuntimeError):
+        create_app(root=root, base_url="productivitytech.io", garmin_factory=FakeGarmin)
 
 
 def test_delete_refuses_an_invalid_id(root):

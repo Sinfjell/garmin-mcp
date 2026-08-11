@@ -38,10 +38,12 @@ BASE_URL_ENV = "GARMIN_CONNECTOR_BASE_URL"
 PREFIX_ENV = "GARMIN_CONNECTOR_PREFIX"
 
 # Garmin rate-limits datacenter IPs harder than home connections, and this host
-# has a history of it. garminconnect already falls through its five login
-# strategies on a 429; this is the outer retry for when all five were limited.
-DEFAULT_LOGIN_ATTEMPTS = 3
-_BACKOFF_START_SECONDS = 2.0
+# has a history of it. garminconnect already falls through five login strategies
+# internally and only raises once all five were limited — so one outer attempt
+# already costs five SSO hits. Retrying hard would deepen the block rather than
+# get us in, which is why this is a single retry after a real pause, not a loop.
+DEFAULT_LOGIN_ATTEMPTS = 2
+_BACKOFF_START_SECONDS = 5.0
 
 _RATE_LIMITED = (
     "Garmin slipper oss ikke inn akkurat nå (for mange forsøk). "
@@ -80,6 +82,15 @@ def create_app(
             f"Onboarding needs a token-store root: set {multitenant.MULTI_TENANT_ROOT_ENV}."
         )
     base_url = base_url if base_url is not None else os.environ.get(BASE_URL_ENV, "")
+    if not base_url.startswith(("http://", "https://")):
+        # Fail at startup, not at the finish line. Without this the app boots
+        # fine and only reveals the misconfiguration by handing someone a
+        # relative path — after they have already typed their password and
+        # burned a one-time code.
+        raise RuntimeError(
+            f"{BASE_URL_ENV} must be the public origin, e.g. https://example.com "
+            f"(got {base_url!r}). Connector URLs are built from it."
+        )
     prefix = prefix if prefix is not None else os.environ.get(PREFIX_ENV, "/u")
 
     sessions = SessionStore(
@@ -136,10 +147,12 @@ def create_app(
             return HTMLResponse(pages.login_page(_RATE_LIMITED), status_code=429)
         except GarminConnectAuthenticationError:
             return HTMLResponse(pages.login_page(_BAD_CREDENTIALS), status_code=401)
-        except Exception:
-            # Logged without the exception's own message: a login failure can
-            # echo back the request, and the request carried the password.
-            logger.exception("Onboarding login failed.")
+        except Exception as exc:  # noqa: BLE001 - the user gets a page, not a traceback
+            # Only the exception's *type*. Not exc_info, not str(exc): a failing
+            # HTTP client can echo the request it sent, and that request carried
+            # the password. Losing the message costs some debuggability; keeping
+            # it risks writing a credential to the journal forever.
+            logger.error("Onboarding login failed: %s", type(exc).__name__)
             return HTMLResponse(pages.login_page(_LOGIN_FAILED), status_code=502)
 
         if status == "needs_mfa":

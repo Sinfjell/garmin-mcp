@@ -13,6 +13,7 @@ being carried across it.
 """
 import secrets
 import shutil
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -82,31 +83,46 @@ class PendingLogin:
 
 
 class SessionStore:
-    """In-memory pending logins, expired on read. Never touches disk."""
+    """In-memory pending logins, expired on read. Never touches disk.
+
+    Guarded by a lock: FastAPI runs synchronous endpoints in a worker
+    threadpool, so two people finishing their MFA at the same moment really do
+    hit this concurrently, and an unguarded purge-then-delete raises KeyError
+    on the loser.
+    """
 
     def __init__(self, ttl_seconds: float = DEFAULT_SESSION_TTL_SECONDS, clock=time.monotonic):
         self._ttl = ttl_seconds
         self._clock = clock
         self._sessions: dict[str, PendingLogin] = {}
+        self._lock = threading.Lock()
 
-    def _purge(self) -> None:
+    def _purge_locked(self) -> None:
         now = self._clock()
         for key in [k for k, s in self._sessions.items() if now - s.created_at > self._ttl]:
-            del self._sessions[key]
+            self._sessions.pop(key, None)
 
     def add(self, client: Any, client_state: Any) -> str:
-        self._purge()
         session_id = secrets.token_urlsafe(24)
-        self._sessions[session_id] = PendingLogin(
-            client=client, client_state=client_state, created_at=self._clock()
-        )
+        with self._lock:
+            self._purge_locked()
+            self._sessions[session_id] = PendingLogin(
+                client=client, client_state=client_state, created_at=self._clock()
+            )
         return session_id
 
     def pop(self, session_id: str) -> PendingLogin | None:
-        """Take a session out of the store. One code attempt per session id."""
-        self._purge()
-        return self._sessions.pop(session_id, None)
+        """Take a session out of the store. One code attempt per session id.
+
+        Removing before validating is deliberate: a rejected code also clears
+        Garmin's own MFA state, so the session is spent either way, and it means
+        two concurrent posts of the same id cannot both proceed.
+        """
+        with self._lock:
+            self._purge_locked()
+            return self._sessions.pop(session_id, None)
 
     def __len__(self) -> int:
-        self._purge()
-        return len(self._sessions)
+        with self._lock:
+            self._purge_locked()
+            return len(self._sessions)

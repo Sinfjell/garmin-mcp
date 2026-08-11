@@ -12,7 +12,16 @@ creates a token store, and step 6, which deletes one.
 
 ```bash
 BASE=https://productivitytech.io          # the host serving the onboarding page
-ONBOARD=$BASE/garmin                      # onboarding page (nginx location)
+ONBOARD=$BASE/<onboarding-path>           # onboarding page (nginx location)
+
+# The already-running single-tenant connector, whose behaviour must not change.
+# It is a credential — read it off the host rather than pasting it around:
+#   sudo grep -o -- '--path [^ ]*' /etc/systemd/system/garmin-mcp.service
+EXISTING_CONNECTOR_URL=https://productivitytech.io/<existing-secret-path>/mcp
+
+# Where the multi-tenant unit keeps per-user token stores (its
+# GARMIN_MULTI_TENANT_ROOT), needed for steps 5 and 6.
+GARMIN_MULTI_TENANT_ROOT=/var/www/vhosts/productivitytech.io/.garmin-tenants
 ```
 
 The person being onboarded needs only their own Garmin Connect login. They do
