@@ -18,9 +18,15 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from garminconnect import Garmin, GarminConnectAuthenticationError
 from mcp.server.fastmcp import FastMCP
 
+from garmin_mcp import multitenant
+
 mcp = FastMCP("garmin")
 
 _client: Garmin | None = None
+
+# Multi-tenant clients, keyed by token store. Separate from `_client` so the
+# single-tenant cache can never be handed to a tenant request, or vice versa.
+_tenant_clients: dict[str, Garmin] = {}
 
 # "Today" always means the user's local calendar day, but this server may run on
 # a UTC host. Resolving in UTC would push a late-evening session onto the next
@@ -49,9 +55,41 @@ def _token_store() -> str:
     return os.environ.get("GARMIN_TOKENS", str(Path.home() / ".garminconnect"))
 
 
+def _tenant_client(tokenstore: str) -> Garmin:
+    """Client for one multi-tenant user, from their token store only.
+
+    No env-credential fallback here: `GARMIN_EMAIL`/`GARMIN_PASSWORD` belong to
+    whoever runs the host, so falling back to them would serve the host's data
+    to a tenant whose own session has expired.
+
+    Clients are cached for the life of the process, one per store: re-logging in
+    per request is what trips Garmin's rate limiting. A tenant whose cached
+    session expires therefore gets errors until the process restarts — accepted
+    for a household-scale deployment, and the reason expiry is worth watching.
+    """
+    cached = _tenant_clients.get(tokenstore)
+    if cached is not None:
+        return cached
+    client = Garmin()
+    client.login(tokenstore)
+    _tenant_clients[tokenstore] = client
+    return client
+
+
 def get_client() -> Garmin:
     """Return a lazily-initialized, cached Garmin Connect client."""
     global _client
+
+    tenant_store = multitenant.current_token_store()
+    if tenant_store is not None:
+        return _tenant_client(tenant_store)
+
+    # Fail closed. Once the process serves tenants, an unbound token store means
+    # the request was not routed as we expect — answering it from the host's own
+    # session would hand the host's Garmin data to whoever asked.
+    if multitenant.multi_tenant_active():
+        raise RuntimeError("No tenant token store bound for this request.")
+
     if _client is not None:
         return _client
 
@@ -618,6 +656,14 @@ def get_threshold_history(start_date: str, end_date: str, aggregation: str = "we
     return _tool_call(build)
 
 
+def _run_multi_tenant(root: Path, host: str, port: int, prefix: str) -> None:
+    """Serve every user's endpoint from one process under <prefix>/<user-id>/mcp."""
+    import uvicorn
+
+    app = multitenant.build_multi_tenant_app(mcp, root, prefix)
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
 def _print_tool_list() -> None:
     for tool in asyncio.run(mcp.list_tools()):
         first_line = (tool.description or "").strip().splitlines()[0] if tool.description else ""
@@ -651,9 +697,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--path",
-        default="/mcp",
+        default=None,
         help="URL path the streamable-http endpoint mounts at (default: /mcp). Give it an "
-        "unguessable value to use as a lightweight secret when hosting remotely.",
+        "unguessable value to use as a lightweight secret when hosting remotely. In "
+        f"multi-tenant mode ({multitenant.MULTI_TENANT_ROOT_ENV} set) this is instead the "
+        "prefix each user's endpoint hangs off (default: /u), giving <prefix>/<user-id>/mcp "
+        "— there the user ID carries the secrecy, so the prefix need not.",
     )
     args = parser.parse_args()
 
@@ -664,7 +713,11 @@ def main() -> None:
     if args.transport == "streamable-http":
         mcp.settings.host = args.host
         mcp.settings.port = args.port
-        mcp.settings.streamable_http_path = args.path
+        root = multitenant.multi_tenant_root()
+        if root is not None:
+            _run_multi_tenant(root, args.host, args.port, args.path or "/u")
+            return
+        mcp.settings.streamable_http_path = args.path or "/mcp"
 
     mcp.run(transport=args.transport)
 

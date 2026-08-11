@@ -157,6 +157,39 @@ your full HTTPS URL (e.g. `https://mcp.example.com/8f2c1a9e7b.../mcp`). Once
 added, it's available from Claude on web and mobile, not just Claude Code or
 Desktop.
 
+### 5. Optional: serve several people from one process (multi-tenant)
+
+A single hosted server can serve more than one Garmin account. Set
+`GARMIN_MULTI_TENANT_ROOT` to a directory of per-user token stores:
+
+```bash
+GARMIN_MULTI_TENANT_ROOT=/srv/garmin-tenants \
+  garmin-mcp --transport streamable-http --port 8766 --path /u
+```
+
+Each subdirectory is one user's token store, and its name is the user ID that
+appears in that user's endpoint URL:
+
+```
+/srv/garmin-tenants/<user-id>/     ->  https://host/u/<user-id>/mcp
+```
+
+- **User IDs are 32–128 chars of `[a-z0-9-]`** and must be generated randomly
+  (≥128 bits). As in single-tenant hosting, possession of the URL *is* the
+  authentication, so a guessable ID is a leaked account.
+- An unknown or malformed ID gets a **404**. A request never falls back to
+  another user's token store, and never to the `GARMIN_EMAIL` /
+  `GARMIN_PASSWORD` environment credentials — those belong to the host, not to
+  a tenant.
+- Requests are served statelessly, so a session cannot outlive the URL that
+  created it.
+- **Leaving `GARMIN_MULTI_TENANT_ROOT` unset changes nothing**: the server runs
+  exactly as it did before, single-tenant, on the `--path` you give it.
+
+Each token store is populated by running `garmin-mcp-auth` as that user (with
+`GARMIN_TOKENS` pointed at their directory) and never contains a password —
+only a session token.
+
 ## Security & privacy
 
 - Your credentials never leave your machine and are never stored by this
