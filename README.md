@@ -186,9 +186,41 @@ appears in that user's endpoint URL:
 - **Leaving `GARMIN_MULTI_TENANT_ROOT` unset changes nothing**: the server runs
   exactly as it did before, single-tenant, on the `--path` you give it.
 
-Each token store is populated by running `garmin-mcp-auth` as that user (with
-`GARMIN_TOKENS` pointed at their directory) and never contains a password —
-only a session token.
+A token store can be populated by hand — run `garmin-mcp-auth` with
+`GARMIN_TOKENS` pointed at that user's directory — but the point of the
+onboarding app below is that nobody has to.
+
+Stores hold a Garmin session token, never a password.
+
+### 6. Optional: let people onboard themselves
+
+```bash
+GARMIN_MULTI_TENANT_ROOT=/srv/garmin-tenants \
+GARMIN_CONNECTOR_BASE_URL=https://host.example.com \
+  garmin-mcp-onboarding --port 8767
+```
+
+Put it behind the same reverse proxy. Someone opens the page, logs in with
+their own Garmin account (Garmin's one-time code included), and the page hands
+them their personal connector URL. Their token store is created for them; you
+are not involved.
+
+The password is passed straight to Garmin and dropped from memory in the same
+call — it is never written to disk, never logged, and is not held across the
+one-time-code wait. The consent text on the first page says so, in Norwegian.
+
+To remove someone:
+
+```bash
+garmin-mcp-tenant list
+garmin-mcp-tenant delete <user-id>
+```
+
+Their URL 404s immediately afterwards. Deletion is a command rather than a web
+endpoint deliberately: with possession-of-URL auth, a delete endpoint would let
+anyone who ever saw a URL wipe that person's access.
+
+`docs/e2e-onboarding.md` has the full verification sequence.
 
 ## Security & privacy
 
