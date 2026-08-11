@@ -6,6 +6,13 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Changed
+- Onboarding no longer retries a rate-limited Garmin login by default.
+  garminconnect already tries five strategies with its own Cloudflare backoff
+  before raising — a single attempt was measured at ~1m45s from the production
+  host — so an outer retry only spent more attempts against an IP Garmin was
+  already refusing. The mechanism stays configurable (`login_attempts`).
+
 ### Added
 - Self-service onboarding app (`garmin-mcp-onboarding`, FastAPI): a person logs
   in with their own Garmin account in a browser — including Garmin's one-time

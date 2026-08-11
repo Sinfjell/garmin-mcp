@@ -223,24 +223,38 @@ def test_bad_credentials_are_reported_without_a_store(client, root):
     assert onboarding_store.list_user_ids(root) == []
 
 
-def test_rate_limit_is_retried_after_a_real_pause(client, slept, root):
-    FakeGarmin.rate_limit_times = 1
-    response = _start(client)
-    assert response.status_code == 200
-    assert slept == [5.0]
-    assert len(onboarding_store.list_user_ids(root)) == 1
+def test_a_rate_limit_is_reported_without_hammering_garmin(client, slept, root):
+    """One attempt by default.
 
-
-def test_persistent_rate_limit_gives_up_politely(client, slept, root):
+    garminconnect has already tried five strategies, with its own Cloudflare
+    backoff, by the time it raises — measured at ~1m45s from the production
+    host. A second attempt would add five more SSO hits against an IP Garmin is
+    already refusing.
+    """
     FakeGarmin.rate_limit_times = 99
     response = _start(client)
     assert response.status_code == 429
     assert "for mange forsøk" in response.text
-    # One retry, not a loop: each attempt already costs five SSO hits inside
-    # garminconnect, so hammering would deepen the block instead of lifting it.
-    assert len(FakeGarmin.instances) == 2
-    assert len(slept) == 1
+    assert len(FakeGarmin.instances) == 1
+    assert slept == []
     assert onboarding_store.list_user_ids(root) == []
+
+
+def test_the_retry_mechanism_still_works_when_turned_on(root, slept, clock):
+    """Kept configurable, so re-enabling it is a config change, not a rewrite."""
+    app = create_app(
+        root=root,
+        base_url="https://productivitytech.io",
+        garmin_factory=FakeGarmin,
+        login_attempts=3,
+        sleep=slept.append,
+        clock=clock,
+    )
+    FakeGarmin.rate_limit_times = 2
+    response = TestClient(app).post("/start", data={"email": EMAIL, "password": PASSWORD})
+    assert response.status_code == 200
+    assert slept == [5.0, 10.0]  # exponential
+    assert len(onboarding_store.list_user_ids(root)) == 1
 
 
 # --- the password must not survive the request ---------------------------
