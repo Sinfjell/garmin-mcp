@@ -4,6 +4,7 @@ The HTTP tests drive the real ASGI app end to end with a fake Garmin client,
 because the property that matters — a request can only read the token store its
 URL names — depends on request routing, not just on the resolver functions.
 """
+import asyncio
 import json
 
 import pytest
@@ -36,9 +37,12 @@ def _reset_client_caches(monkeypatch):
     monkeypatch.setattr(server, "Garmin", FakeGarmin)
     server._client = None
     server._tenant_clients.clear()
+    # Process-global flag: reset so each test is order-independent.
+    multitenant._multi_tenant_active = False
     yield
     server._client = None
     server._tenant_clients.clear()
+    multitenant._multi_tenant_active = False
 
 
 @pytest.fixture(scope="module")
@@ -199,3 +203,45 @@ def test_tenant_request_ignores_env_credentials(http, root, monkeypatch):
 def test_token_store_unbound_after_request(http):
     _daily_stats_store(http, USER_A)
     assert multitenant.current_token_store() is None
+
+
+# --- the isolation mechanism itself --------------------------------------
+
+
+def test_concurrent_tasks_keep_their_own_token_store(root):
+    """Interleaved requests must not see each other's store.
+
+    Isolation rests on each task getting its own copy of the context. This
+    drives that directly, with awaits forcing the two tasks to overlap, so a
+    regression shows up as a failed assert rather than as one person reading
+    another's Garmin data.
+    """
+
+    async def call(user):
+        token = multitenant._current_token_store.set(str(root / user))
+        try:
+            await asyncio.sleep(0)  # yield, so the other task runs in between
+            client = server.get_client()
+            await asyncio.sleep(0)
+            assert multitenant.current_token_store() == str(root / user)
+            return client.tokenstore
+        finally:
+            multitenant._current_token_store.reset(token)
+
+    async def both():
+        return await asyncio.gather(call(USER_A), call(USER_B))
+
+    stores = asyncio.run(both())
+    assert stores == [str(root / USER_A), str(root / USER_B)]
+
+
+def test_multi_tenant_mode_fails_closed_without_a_bound_store(monkeypatch):
+    """An unrouted request must error, never fall back to the host's account."""
+    monkeypatch.setenv("GARMIN_EMAIL", "host@example.com")
+    monkeypatch.setenv("GARMIN_PASSWORD", "hunter2")
+    multitenant.activate_multi_tenant()
+
+    with pytest.raises(RuntimeError):
+        server.get_client()
+    assert server._client is None
+    assert server._tenant_clients == {}

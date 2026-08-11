@@ -186,8 +186,9 @@ appears in that user's endpoint URL:
 - **Leaving `GARMIN_MULTI_TENANT_ROOT` unset changes nothing**: the server runs
   exactly as it did before, single-tenant, on the `--path` you give it.
 
-Populating a token store per user by hand is the manual route; the onboarding
-app (see `src/garmin_mcp/onboarding/`) does it from a web flow.
+Each token store is populated by running `garmin-mcp-auth` as that user (with
+`GARMIN_TOKENS` pointed at their directory) and never contains a password —
+only a session token.
 
 ## Security & privacy
 

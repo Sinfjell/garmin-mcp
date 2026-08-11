@@ -15,6 +15,9 @@ dependencies = [
     # this server imports. Lift the ceiling only together with a port to the 2.x API.
     "mcp[cli]>=1.0,<2",
     "garminconnect>=0.3.3",
+    # Declared explicitly rather than leaned on transitively via mcp[cli]:
+    # multi-tenant mode imports it directly to serve the routing app.
+    "uvicorn>=0.30",
 ]
 
 [project.optional-dependencies]

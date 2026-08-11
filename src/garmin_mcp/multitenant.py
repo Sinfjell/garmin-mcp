@@ -34,7 +34,28 @@ USER_ID_PATTERN = re.compile(r"^[a-z0-9-]{32,128}$")
 
 # The token store for the request currently being served. Unset (None) means
 # single-tenant: the process-wide token store is used instead.
+#
+# This binding reaches the tool call because anyio copies the current context
+# when the MCP session task is spawned from the request task. That is load-
+# bearing, so it is pinned by a test that drives two tenants over real HTTP
+# (tests/test_multitenant.py) rather than assumed. If the assumption ever
+# breaks, `multi_tenant_active` below makes it fail loudly instead of quietly
+# serving the host's account.
 _current_token_store: ContextVar[str | None] = ContextVar("garmin_token_store", default=None)
+
+# Set once the process is serving multi-tenant traffic. Nothing may then be
+# answered from the host's own token store or env credentials.
+_multi_tenant_active = False
+
+
+def activate_multi_tenant() -> None:
+    """Mark this process as multi-tenant: no request may fall back to the host."""
+    global _multi_tenant_active
+    _multi_tenant_active = True
+
+
+def multi_tenant_active() -> bool:
+    return _multi_tenant_active
 
 
 def multi_tenant_root() -> Path | None:
@@ -88,6 +109,7 @@ def build_multi_tenant_app(mcp: Any, root: Path, prefix: str = "/u") -> Any:
     identity could outlive the request that created it.
     """
     inner_path = "/mcp"
+    activate_multi_tenant()
     mcp.settings.stateless_http = True
     mcp.settings.streamable_http_path = inner_path
     inner_app = mcp.streamable_http_app()
