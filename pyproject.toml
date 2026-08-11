@@ -10,18 +10,25 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Sindre Fjellestad" }]
+# Every dependency carries an upper bound, without exception. There is no
+# lockfile, and the production host runs `uvx --from git+...@main`, which
+# re-resolves on every restart — so an unbounded dependency means any restart
+# can pull a breaking major with no code change and no warning. That is not
+# hypothetical here: mcp 2.0.0 removed `mcp.server.fastmcp` and crash-looped the
+# server 160+ times on 2026-08-05. Lift a ceiling only together with a port to
+# the new API — never to make CI green.
 dependencies = [
     # Pinned below 2.0: the MCP SDK dropped `mcp.server.fastmcp` in 2.0.0, which
     # this server imports. Lift the ceiling only together with a port to the 2.x API.
     "mcp[cli]>=1.0,<2",
-    "garminconnect>=0.3.3",
+    "garminconnect>=0.3.3,<0.4",
     # Declared explicitly rather than leaned on transitively via mcp[cli]:
     # multi-tenant mode imports it directly to serve the routing app.
-    "uvicorn>=0.30",
+    "uvicorn>=0.30,<1",
     # Onboarding app. python-multipart is what lets FastAPI read the login
     # form; without it the form posts fail at runtime, not at import.
-    "fastapi>=0.110",
-    "python-multipart>=0.0.9",
+    "fastapi>=0.110,<1",
+    "python-multipart>=0.0.9,<1",
 ]
 
 [project.optional-dependencies]

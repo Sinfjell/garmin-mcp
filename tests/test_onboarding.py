@@ -17,6 +17,7 @@ from garminconnect import (
 
 from garmin_mcp import multitenant
 from garmin_mcp.onboarding import cli as tenants
+from garmin_mcp.onboarding import logging_guard
 from garmin_mcp.onboarding import store as onboarding_store
 from garmin_mcp.onboarding.app import create_app
 
@@ -319,6 +320,40 @@ def test_password_is_dropped_after_a_failed_login(client):
     FakeGarmin.bad_credentials = True
     _start(client)
     assert FakeGarmin.instances[-1].password is None
+
+
+def test_a_third_party_logger_cannot_leak_the_password_either(client, caplog, monkeypatch):
+    """The libraries on the login path are not bound by our logging rule.
+
+    garminconnect and its HTTP stack log on the same code path, and a failing
+    client is exactly what echoes back the request it sent. This drives that:
+    a library logger shouting the password mid-login must come out redacted.
+    """
+    library_logger = logging.getLogger("garminconnect.client")
+
+    def noisy_login(self, tokenstore=None):
+        library_logger.error("POST /sso failed for %s with password=%s", EMAIL, PASSWORD)
+        raise GarminConnectAuthenticationError("nope")
+
+    monkeypatch.setattr(FakeGarmin, "login", noisy_login)
+
+    with caplog.at_level(logging.DEBUG):
+        # caplog installs its own handler, so the filter goes there — the same
+        # place install() puts it on the root handlers in production.
+        caplog.handler.addFilter(logging_guard.CredentialScrubbingFilter())
+        _start(client)
+
+    assert caplog.records, "the library did log something"
+    assert PASSWORD not in caplog.text
+    assert logging_guard.REDACTED in caplog.text
+
+
+def test_the_scrubber_is_inert_when_no_login_is_in_flight(caplog):
+    """It must not touch ordinary logging outside a login."""
+    with caplog.at_level(logging.DEBUG):
+        caplog.handler.addFilter(logging_guard.CredentialScrubbingFilter())
+        logging.getLogger("somewhere").info("nothing secret here")
+    assert "nothing secret here" in caplog.text
 
 
 # --- deletion ------------------------------------------------------------
