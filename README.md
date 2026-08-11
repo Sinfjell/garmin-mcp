@@ -218,11 +218,26 @@ or with a Cloudflare challenge. Give the reverse proxy a generous
 already backs off internally, so retrying just spends more attempts against an
 IP that is already refusing them.
 
-If server-side login is blocked, the fallback costs one file copy: the person
-runs `garmin-mcp-auth` on their own machine and you drop the resulting
-`~/.garminconnect` directory into the tenant root under a fresh random ID. No
-new unit, no nginx change — that is what multi-tenant hosting buys even when
-self-service can't complete.
+Measured from both sides on 2026-08-11, same code and same throwaway account:
+a residential IP reached the credential check (`401 Invalid Username or
+Password`) in 27s, while the hosted IP got a Cloudflare 403 after 1m45s. The
+library and the flow are fine; the *location* of the login is the problem.
+
+So when server-side login is blocked, move that one step to where it works:
+
+```bash
+# on their own machine, where the IP is fine and the password never leaves
+garmin-mcp-auth
+
+# on the host, with the ~/.garminconnect directory they send you
+garmin-mcp-tenant import ./their-garminconnect
+# -> Imported as 3f9a...  https://host.example.com/u/3f9a.../mcp
+```
+
+`import` copies (never moves), clamps the directory to 0700 and the token to
+0600, mints the random ID, and prints the finished connector URL. No new unit,
+no nginx change — that is what multi-tenant hosting buys even when self-service
+can't complete.
 
 To remove someone:
 

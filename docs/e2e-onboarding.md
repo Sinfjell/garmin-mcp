@@ -42,7 +42,34 @@ curl -sS -X POST "$EXISTING_CONNECTOR_URL" \
 Expect a `result` with `serverInfo.name == "garmin"`. Re-run the identical
 command after every change below and diff the two.
 
-## 2. The person onboards in a browser
+## 2. The person gets a token store
+
+### 2a. In a browser (the intended route)
+
+Only works if this host can reach Garmin's login. As of 2026-08-11 it cannot —
+Cloudflare rejects the only working strategy from this IP — so check 2b first.
+
+### 2b. From their own machine (the route that works today)
+
+They run this once, on their own computer:
+
+```bash
+uvx --from git+https://github.com/Sinfjell/garmin-mcp@main garmin-mcp-auth
+```
+
+It prompts for their Garmin email, password and MFA code, and writes
+`~/.garminconnect`. Their password never leaves their machine, and their home
+IP is not the one Garmin is refusing. They send you that directory.
+
+```bash
+garmin-mcp-tenant import ./their-garminconnect
+# -> Imported as <user-id>
+# -> https://productivitytech.io/garmin-u/<user-id>/mcp
+```
+
+Continue from step 3 with that URL. Everything below is identical either way.
+
+## 2c. If the browser route is available, the person onboards there
 
 They open `$ONBOARD` on any device, read the consent text, and enter their
 Garmin email and password. If Garmin asks for a one-time code, they get a
