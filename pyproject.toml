@@ -18,6 +18,10 @@ dependencies = [
     # Declared explicitly rather than leaned on transitively via mcp[cli]:
     # multi-tenant mode imports it directly to serve the routing app.
     "uvicorn>=0.30",
+    # Onboarding app. python-multipart is what lets FastAPI read the login
+    # form; without it the form posts fail at runtime, not at import.
+    "fastapi>=0.110",
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +36,8 @@ dev = [
 [project.scripts]
 garmin-mcp = "garmin_mcp.server:main"
 garmin-mcp-auth = "garmin_mcp.auth:main"
+garmin-mcp-onboarding = "garmin_mcp.onboarding.app:main"
+garmin-mcp-tenant = "garmin_mcp.tenants:main"
 
 [project.urls]
 Homepage = "https://github.com/Sinfjell/garmin-mcp"

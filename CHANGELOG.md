@@ -7,6 +7,21 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- Self-service onboarding app (`garmin-mcp-onboarding`, FastAPI): a person logs
+  in with their own Garmin account in a browser — including Garmin's one-time
+  code — and gets their personal connector URL, without anyone touching the
+  host. The password is passed to Garmin and dropped from memory in the same
+  call; it is never written to disk, never logged, and specifically is not held
+  across the MFA wait. What lands on disk is Garmin's own token, at 0600 in a
+  0700 directory. The consent page (Norwegian) states what is stored and how to
+  remove it.
+- `garmin-mcp-tenant list|delete <user-id>` — admin CLI for token stores.
+  Deleting is a command rather than an endpoint on purpose: with
+  possession-of-URL auth, a delete endpoint would let anyone who ever saw a URL
+  wipe that person's access.
+- `docs/e2e-onboarding.md` — the command sequence for verifying a real
+  onboarding end to end, including the before/after regression call against an
+  existing connector and the password-persistence check.
 - Multi-tenant hosting: set `GARMIN_MULTI_TENANT_ROOT=<dir>` and one
   streamable-http process serves several Garmin accounts, one per URL path-ID
   (`<prefix>/<user-id>/mcp` → `<dir>/<user-id>/` as that request's token
