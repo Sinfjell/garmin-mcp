@@ -7,6 +7,15 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- Multi-tenant hosting: set `GARMIN_MULTI_TENANT_ROOT=<dir>` and one
+  streamable-http process serves several Garmin accounts, one per URL path-ID
+  (`<prefix>/<user-id>/mcp` → `<dir>/<user-id>/` as that request's token
+  store). User IDs are validated strictly (32–128 chars of `[a-z0-9-]`, which
+  rules out path traversal by construction); an unknown or malformed ID gets a
+  404 and never falls back to another user's tokens or to the host's
+  `GARMIN_EMAIL`/`GARMIN_PASSWORD`. Requests are served statelessly so a
+  session cannot outlive the URL that created it. With the variable unset the
+  server behaves exactly as before.
 - `get_personal_records()` — personal records / PBs. Labels the common running
   records (fastest 1km/1mile/5km/10km, longest run) and formats their values
   (clock string for time records, "X.XX km" for distance); any other/unmapped
