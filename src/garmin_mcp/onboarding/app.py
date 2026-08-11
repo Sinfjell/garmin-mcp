@@ -37,12 +37,16 @@ logger = logging.getLogger(__name__)
 BASE_URL_ENV = "GARMIN_CONNECTOR_BASE_URL"
 PREFIX_ENV = "GARMIN_CONNECTOR_PREFIX"
 
-# Garmin rate-limits datacenter IPs harder than home connections, and this host
-# has a history of it. garminconnect already falls through five login strategies
-# internally and only raises once all five were limited — so one outer attempt
-# already costs five SSO hits. Retrying hard would deepen the block rather than
-# get us in, which is why this is a single retry after a real pause, not a loop.
-DEFAULT_LOGIN_ATTEMPTS = 2
+# No outer retry by default, measured rather than guessed.
+#
+# garminconnect already supplies both halves of the plan's rate-limit defence
+# itself: it falls through five login strategies, and it sleeps 12-20s between
+# the portal ones to stay under Cloudflare. A single attempt from the Hetzner
+# host was timed at ~1m45s (two strategies 429, three blocked) — so a second
+# attempt buys a multi-minute wait and five more SSO hits against an IP Garmin
+# is already refusing, which pushes away from success rather than towards it.
+# The mechanism stays configurable so it can be turned on if the picture changes.
+DEFAULT_LOGIN_ATTEMPTS = 1
 _BACKOFF_START_SECONDS = 5.0
 
 _RATE_LIMITED = (

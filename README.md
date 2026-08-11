@@ -209,6 +209,21 @@ The password is passed straight to Garmin and dropped from memory in the same
 call — it is never written to disk, never logged, and is not held across the
 one-time-code wait. The consent text on the first page says so, in Norwegian.
 
+**Expect the login itself to be slow, and sometimes blocked.** Garmin treats
+datacenter IPs far more harshly than home connections. A single login attempt
+runs five strategies with 12–20s waits between them — a minute or two of real
+time — and from a hosted IP some or all of those strategies can come back 429
+or with a Cloudflare challenge. Give the reverse proxy a generous
+`proxy_read_timeout` (300s), and don't add retries on top: garminconnect
+already backs off internally, so retrying just spends more attempts against an
+IP that is already refusing them.
+
+If server-side login is blocked, the fallback costs one file copy: the person
+runs `garmin-mcp-auth` on their own machine and you drop the resulting
+`~/.garminconnect` directory into the tenant root under a fresh random ID. No
+new unit, no nginx change — that is what multi-tenant hosting buys even when
+self-service can't complete.
+
 To remove someone:
 
 ```bash
