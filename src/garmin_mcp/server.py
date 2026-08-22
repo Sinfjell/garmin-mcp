@@ -435,6 +435,235 @@ def _fmt_threshold_history(raw: dict) -> dict:
     return {"points": points}
 
 
+# --- Heart-rate zones -------------------------------------------------------
+
+# get_heart_rate_zones() returns a *list*, one entry per sport; the "DEFAULT"
+# entry is the one the watch applies to running. Each entry carries only the
+# floor of each zone — there is no ceiling field, so a zone's ceiling is the
+# next zone's floor minus one, and zone 5 runs to max HR.
+_HR_ZONE_COUNT = 5
+
+
+def _fmt_hr_zones(raw: Any) -> dict:
+    """Reshape get_heart_rate_zones() into zones with explicit floor and ceiling."""
+    entries = [e for e in (raw if isinstance(raw, list) else [raw]) if isinstance(e, dict)]
+    if not entries:
+        return {"error": "unexpected heart-rate-zone shape", "raw": raw}
+    entry = next((e for e in entries if e.get("sport") == "DEFAULT"), entries[0])
+    floors = [entry.get(f"zone{i}Floor") for i in range(1, _HR_ZONE_COUNT + 1)]
+    max_hr = entry.get("maxHeartRateUsed")
+    zones = []
+    for i, floor in enumerate(floors):
+        if floor is None:
+            continue
+        nxt = next((f for f in floors[i + 1:] if f is not None), None)
+        zones.append({"zone": i + 1, "floor_bpm": floor, "ceiling_bpm": (nxt - 1) if nxt is not None else max_hr})
+    return {
+        "sport": entry.get("sport"),
+        "method": entry.get("trainingMethod"),
+        "zones": zones,
+        "lthr_bpm": entry.get("lactateThresholdHeartRateUsed"),
+        "max_hr_bpm": max_hr,
+        "resting_hr_bpm": entry.get("restingHeartRateUsed"),
+    }
+
+
+# --- Work-rep classification ------------------------------------------------
+
+# Garmin exposes two independent typings on the same activity. `intensityType`
+# on laps is the one that lies: on 2026-08-02 every lap of a 6x1000m session was
+# tagged INTERVAL (warm-up, reps, recoveries and cool-down alike), and on
+# 2026-08-16 the cool-down jog was tagged ACTIVE. get_activity_typed_splits()
+# carries the workout structure Garmin actually recorded and is used first;
+# `intensityType` is only a fallback for activities that have no typed structure.
+_TYPED_SPLIT_PREFIX = "INTERVAL_"
+_TYPED_WORK_TYPES = {"INTERVAL_ACTIVE"}
+_TYPED_REST_TYPES = {"INTERVAL_REST", "INTERVAL_RECOVERY"}
+_LAP_WORK_TYPES = {"ACTIVE"}
+_LAP_REST_TYPES = {"REST", "RECOVERY"}
+
+# Guards. Every one of these exists because a real activity fails without it —
+# see the tests, which pin the activity behind each.
+_MIN_REP_DISTANCE_M = 200.0  # 2026-08-20 had four ACTIVE splits of 1 m / 14-20 min
+_MIN_REP_DURATION_S = 30.0
+_MAX_REP_PACE_DEVIATION_S = 45.0  # 2026-08-16 tagged a 7:29/km cool-down ACTIVE among 3:50 reps
+_LONE_REP_COVERAGE = 0.9  # a single "rep" that is the whole session is not a rep
+
+
+def _pace_from(distance_m: Any, duration_s: Any) -> tuple[str | None, float | None]:
+    """Pace for one split/lap, via the same m/s -> "M:SS" path as everything else."""
+    if not isinstance(distance_m, (int, float)) or not isinstance(duration_s, (int, float)):
+        return None, None
+    if distance_m <= 0 or duration_s <= 0:
+        return None, None
+    return _speed_to_pace(distance_m / duration_s)
+
+
+def _fmt_rep(item: dict, kind: str, type_key: str) -> dict:
+    distance_m = round(item.get("distance") or 0, 1)
+    duration_s = round(item.get("duration") or 0, 1)
+    pace_str, pace_dec = _pace_from(distance_m, duration_s)
+    return {
+        "is_work_rep": kind == "work",
+        "kind": kind,
+        "distance_m": distance_m,
+        "duration_s": duration_s,
+        "pace_per_km": pace_str,
+        "pace_min_per_km": pace_dec,
+        "avg_hr": item.get("averageHR"),
+        "max_hr": item.get("maxHR"),
+        "source_type": item.get(type_key),
+    }
+
+
+def _excluded(rep: dict, reason: str) -> dict:
+    return {
+        "source_type": rep["source_type"],
+        "distance_m": rep["distance_m"],
+        "pace_per_km": rep["pace_per_km"],
+        "reason": reason,
+    }
+
+
+def _median(values: list[float]) -> float:
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
+def _guard_work_reps(work: list[dict], structured_distance_m: float) -> tuple[list[dict], list[dict]]:
+    """Drop split/lap entries that carry a work label but are not work reps.
+
+    Three ways a labelled rep is not one: it is a fragment (metres long), it is
+    a cool-down or warm-up jog that kept the label, or it is the whole session
+    under one label — the last being how an unstructured run turns into a "rep"
+    at the activity's own average pace, which is exactly the number no consumer
+    may ever be handed.
+    """
+    kept, dropped = [], []
+    for rep in work:
+        if rep["distance_m"] < _MIN_REP_DISTANCE_M or rep["duration_s"] < _MIN_REP_DURATION_S:
+            dropped.append(_excluded(rep, "too_short"))
+        else:
+            kept.append(rep)
+
+    lone = kept[0] if len(kept) == 1 else None
+    if lone and structured_distance_m > 0 and lone["distance_m"] / structured_distance_m >= _LONE_REP_COVERAGE:
+        return [], dropped + [_excluded(lone, "covers_whole_activity")]
+
+    paced = [r for r in kept if r["pace_min_per_km"] is not None]
+    if len(paced) > 1:
+        limit = _median([r["pace_min_per_km"] for r in paced]) + _MAX_REP_PACE_DEVIATION_S / 60
+        outliers = [r for r in paced if r["pace_min_per_km"] > limit]
+        if outliers:
+            kept = [r for r in kept if not any(r is o for o in outliers)]
+            dropped += [_excluded(r, "pace_outlier") for r in outliers]
+    return kept, dropped
+
+
+def _reps_from_typed_splits(splits: list[dict]) -> tuple[list[dict], list[dict]] | None:
+    """Work + rest reps from Garmin's typed splits, or None if none are typed.
+
+    The response interleaves a second, independent run/walk typing (RWD_RUN,
+    RWD_WALK, RWD_STAND) that overlaps the interval splits in time — counting
+    those would double every rep, so only INTERVAL_* entries are considered.
+    """
+    interval = [s for s in splits if str(s.get("type") or "").startswith(_TYPED_SPLIT_PREFIX)]
+    if not interval:
+        return None
+    work = [_fmt_rep(s, "work", "type") for s in interval if s.get("type") in _TYPED_WORK_TYPES]
+    rest = [_fmt_rep(s, "rest", "type") for s in interval if s.get("type") in _TYPED_REST_TYPES]
+    # A lone INTERVAL_* split is an unstructured run that Garmin labelled in one
+    # piece (an ordinary easy run comes back as a single INTERVAL_ACTIVE or
+    # INTERVAL_WARMUP covering the whole distance). There is no structure to read.
+    if len(interval) == 1:
+        return [], [_excluded(r, "no_interval_structure") for r in work]
+    structured = sum(s.get("distance") or 0 for s in interval)
+    kept, dropped = _guard_work_reps(work, structured)
+    return kept + rest, dropped
+
+
+def _reps_from_lap_intensity(laps: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Fallback classification from lap `intensityType`, for untyped activities.
+
+    Uniform intensity across every lap carries no information (2026-08-02 tagged
+    all 13 laps INTERVAL). Returning nothing is correct there: the alternative is
+    handing back warm-up and cool-down as reps.
+    """
+    labels = {lap.get("intensityType") for lap in laps}
+    if len(labels) < 2:
+        # Same shape as every other "excluded" entry, so a consumer can read the
+        # list without checking which branch produced it.
+        uniform = {"source_type": next(iter(labels), None), "distance_m": None, "pace_per_km": None}
+        return [], [{**uniform, "reason": "uniform_intensity"}]
+    work = [_fmt_rep(lap, "work", "intensityType") for lap in laps if lap.get("intensityType") in _LAP_WORK_TYPES]
+    rest = [_fmt_rep(lap, "rest", "intensityType") for lap in laps if lap.get("intensityType") in _LAP_REST_TYPES]
+    kept, dropped = _guard_work_reps(work, sum(lap.get("distance") or 0 for lap in laps))
+    return kept + rest, dropped
+
+
+def _summarize_work(reps: list[dict]) -> dict:
+    work = [r for r in reps if r["is_work_rep"]]
+    paces = [r["pace_min_per_km"] for r in work if r["pace_min_per_km"] is not None]
+    hrs = [r["avg_hr"] for r in work if isinstance(r["avg_hr"], (int, float))]
+    max_hrs = [r["max_hr"] for r in work if isinstance(r["max_hr"], (int, float))]
+    avg_pace_str, avg_pace_dec = (None, None)
+    if paces:
+        avg_pace_str, avg_pace_dec = _speed_to_pace(1000 / (sum(paces) / len(paces) * 60))
+    return {
+        "count": len(work),
+        "total_distance_m": round(sum(r["distance_m"] for r in work), 1),
+        "avg_pace_per_km": avg_pace_str,
+        "avg_pace_min_per_km": avg_pace_dec,
+        "fastest_pace_per_km": _speed_to_pace(1000 / (min(paces) * 60))[0] if paces else None,
+        "slowest_pace_per_km": _speed_to_pace(1000 / (max(paces) * 60))[0] if paces else None,
+        "pace_spread_s_per_km": round((max(paces) - min(paces)) * 60) if paces else None,
+        "avg_hr": round(sum(hrs) / len(hrs), 1) if hrs else None,
+        "max_hr": max(max_hrs) if max_hrs else None,
+    }
+
+
+# How many recent activities to look through for running ones. Runs are a
+# minority of Garmin activity types (strength, tennis, hiking all interleave),
+# so a window sized to the rep-scan limit would come back near-empty.
+_ACTIVITY_SCAN_WINDOW = 50
+
+# Garmin has a running type per surface — running, track_running, trail_running,
+# treadmill_running, virtual_run. Matching the whole family matters: the
+# 2026-08-16 track session is `track_running`, and a prefix match on "running"
+# silently drops exactly the structured track sessions worth comparing against.
+_RUNNING_TYPE_MARKER = "run"
+
+
+def _is_running(activity: dict) -> bool:
+    return _RUNNING_TYPE_MARKER in str((activity.get("activityType") or {}).get("typeKey") or "")
+
+
+def _classify_intervals(client: Garmin, activity_id: str) -> dict:
+    """Work reps for one activity, preferring typed splits over lap intensity."""
+    try:
+        splits = (client.get_activity_typed_splits(activity_id) or {}).get("splits") or []
+    except Exception:  # noqa: BLE001 - an activity without typed splits falls back below
+        splits = []
+    classified = _reps_from_typed_splits(splits) if splits else None
+    if classified is not None:
+        reps, dropped = classified
+        source = "typed_splits"
+    else:
+        laps = (client.get_activity_splits(activity_id) or {}).get("lapDTOs") or []
+        reps, dropped = _reps_from_lap_intensity(laps)
+        source = "garmin_intensity"
+    return {
+        "activity_id": activity_id,
+        "classified_by": source,
+        "reps": reps,
+        "work_summary": _summarize_work(reps),
+        "excluded": dropped,
+    }
+
+
 @mcp.tool()
 def list_recent_activities(limit: int = 10) -> str:
     """List the most recent Garmin activities, newest first.
@@ -652,6 +881,111 @@ def get_threshold_history(start_date: str, end_date: str, aggregation: str = "we
             latest=False, start_date=start_date, end_date=end_date, aggregation=aggregation
         )
         return _fmt_threshold_history(raw)
+
+    return _tool_call(build)
+
+
+@mcp.tool()
+def get_running_threshold() -> str:
+    """Get the running threshold anchor: lactate threshold pace, LTHR, and HR zones.
+
+    This is the number a threshold or interval session should be prescribed
+    from — never an activity's average pace. Returns a JSON object with:
+
+    - "lactate_threshold": threshold heart rate (LTHR, bpm) and threshold pace
+      ("M:SS/km" plus decimal min/km and raw m/s), with the date Garmin last
+      measured it. Check that date: a threshold from months ago is stale.
+    - "heart_rate_zones": the five zones with explicit floor_bpm and
+      ceiling_bpm, plus max and resting HR and the method Garmin used.
+
+    Each section is fetched independently, so one dead endpoint leaves the
+    other intact. For VO2 max and race predictions use get_performance_metrics.
+    """
+
+    def build(c: Garmin) -> dict:
+        def section(fetch: Callable[[], Any], fmt: Callable[[Any], dict]) -> dict:
+            try:
+                return fmt(fetch())
+            except Exception as exc:  # noqa: BLE001 - one dead endpoint shouldn't sink the other
+                return {"error": f"unavailable: {exc}"}
+
+        return {
+            "lactate_threshold": section(lambda: c.get_lactate_threshold(latest=True), _fmt_lactate_threshold),
+            "heart_rate_zones": section(c.get_heart_rate_zones, _fmt_hr_zones),
+        }
+
+    return _tool_call(build)
+
+
+@mcp.tool()
+def get_activity_intervals(activity_id: str) -> str:
+    """Get the work reps of an interval session, with warm-up and cool-down excluded.
+
+    `activity_id` is the numeric id from list_recent_activities. Use this
+    instead of get_activity_laps when you need what the reps were actually run
+    at: it answers "how fast were the intervals", not "how fast was the run".
+
+    Returns a JSON object with "classified_by" — `typed_splits` (Garmin's
+    recorded workout structure, preferred) or `garmin_intensity` (the lap
+    intensity field, used only when an activity has no typed structure) — so
+    the caller can see how certain the classification is. "reps" holds one
+    entry per work rep and per rest between them — read `is_work_rep` rather
+    than assuming every entry is a rep — each with distance_m,
+    duration_s, pace_per_km, avg/max HR. "work_summary" aggregates the work
+    reps only (count, total distance, average/fastest/slowest pace, pace
+    spread, HR). "excluded" lists what was dropped and why.
+
+    An unstructured run returns **zero** work reps rather than one rep covering
+    the whole activity: the activity's own average pace is never a rep pace.
+    """
+    return _tool_call(lambda c: _classify_intervals(c, activity_id))
+
+
+@mcp.tool()
+def find_comparable_intervals(target_distance_m: float, tolerance_pct: float = 10.0, activity_limit: int = 10) -> str:
+    """Find recent work reps of a given distance, across your last running activities.
+
+    Answers "what have I been running 1000m reps at lately?" in one call,
+    replacing list-activities → laps-per-activity → filter-by-hand. Every rep
+    returned has been through the same classification as
+    get_activity_intervals, so warm-ups, rests and cool-downs never appear.
+
+    `target_distance_m` is the rep distance to match (e.g. 1000). Reps within
+    `tolerance_pct` of it are returned (default 10%, so 900-1100 m).
+    `activity_limit` (default 10) caps how many running activities are opened —
+    each one costs a Garmin call — and they are taken from the most recent
+    activities of any type, so a long stretch without running returns fewer.
+
+    Returns a JSON object with "matches" (each rep plus its activity_id, date
+    and name, newest first), "match_count", and "activities_scanned".
+    """
+
+    def build(c: Garmin) -> dict:
+        recent = c.get_activities(0, _ACTIVITY_SCAN_WINDOW)
+        activities = [a for a in recent if _is_running(a)][:activity_limit]
+        low = target_distance_m * (1 - tolerance_pct / 100)
+        high = target_distance_m * (1 + tolerance_pct / 100)
+        matches = []
+        for a in activities:
+            activity_id = str(a.get("activityId"))
+            result = _classify_intervals(c, activity_id)
+            for rep in result["reps"]:
+                if rep["is_work_rep"] and low <= rep["distance_m"] <= high:
+                    matches.append({
+                        "activity_id": activity_id,
+                        "date": (a.get("startTimeLocal") or "")[:10],
+                        "name": a.get("activityName"),
+                        "classified_by": result["classified_by"],
+                        **rep,
+                    })
+        return {
+            "target_distance_m": target_distance_m,
+            "tolerance_pct": tolerance_pct,
+            "distance_range_m": [round(low, 1), round(high, 1)],
+            "activities_scanned": [str(a.get("activityId")) for a in activities],
+            "match_count": len(matches),
+            "matches": matches,
+        }
 
     return _tool_call(build)
 

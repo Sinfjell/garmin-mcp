@@ -21,7 +21,10 @@ dependencies = [
     # Pinned below 2.0: the MCP SDK dropped `mcp.server.fastmcp` in 2.0.0, which
     # this server imports. Lift the ceiling only together with a port to the 2.x API.
     "mcp[cli]>=1.0,<2",
-    "garminconnect>=0.3.3,<0.4",
+    # Floor is an API requirement, not a preference: get_heart_rate_zones()
+    # (get_running_threshold) landed in 0.3.7 — 0.3.3 through 0.3.6 resolve fine
+    # and then return an error section at runtime. Verified against each release.
+    "garminconnect>=0.3.7,<0.4",
     # Declared explicitly rather than leaned on transitively via mcp[cli]:
     # multi-tenant mode imports it directly to serve the routing app.
     "uvicorn>=0.30,<1",

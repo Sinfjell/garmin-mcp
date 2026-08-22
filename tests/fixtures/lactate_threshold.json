@@ -1,0 +1,18 @@
+{
+ "power": {
+  "calendarDate": "2026-08-11T15:02:52.0",
+  "ftpCreateTime": "2026-08-11T15:02:52.0",
+  "functionalThresholdPower": 454,
+  "isStale": false,
+  "origin": "power",
+  "sport": "RUNNING"
+ },
+ "speed_and_heart_rate": {
+  "calendarDate": "2026-08-11T15:04:36.903",
+  "heartRate": 172,
+  "heartRateCycling": null,
+  "sequence": 1786453477021,
+  "speed": 0.41666549999999997,
+  "version": 1786453477021
+ }
+}

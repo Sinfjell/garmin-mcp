@@ -1,0 +1,114 @@
+{
+ "activityId": 23935979150,
+ "eventDTOs": [
+  {
+   "sectionTypeDTO": {
+    "id": 4,
+    "key": "timerTrigger",
+    "sectionTypeKey": "TIMER_TRIGGER"
+   },
+   "startTimeGMT": "2026-08-11T12:17:00.0",
+   "startTimeGMTDoubleValue": 1786450620000.0
+  },
+  {
+   "sectionTypeDTO": {
+    "id": 4,
+    "key": "timerTrigger",
+    "sectionTypeKey": "TIMER_TRIGGER"
+   },
+   "startTimeGMT": "2026-08-11T12:17:01.0",
+   "startTimeGMTDoubleValue": 1786450621000.0
+  },
+  {
+   "sectionTypeDTO": {
+    "id": 4,
+    "key": "timerTrigger",
+    "sectionTypeKey": "TIMER_TRIGGER"
+   },
+   "startTimeGMT": "2026-08-11T13:02:33.0",
+   "startTimeGMTDoubleValue": 1786453353000.0
+  }
+ ],
+ "lapDTOs": [
+  {
+   "averageHR": 115.0,
+   "averageMovingSpeed": 2.6884524010553332,
+   "averagePower": 365.0,
+   "averageRunCadence": 150.453125,
+   "averageSpeed": 2.687999963760376,
+   "avgGradeAdjustedSpeed": 2.7809998989105225,
+   "avgRespirationRate": 28.229999542236328,
+   "bmrCalories": 2.0,
+   "calories": 18.0,
+   "connectIQMeasurement": [],
+   "distance": 257.75,
+   "duration": 95.873,
+   "elapsedDuration": 95.873,
+   "elevationGain": 3.0,
+   "elevationLoss": 0.0,
+   "groundContactBalanceLeft": 50.52000045776367,
+   "groundContactTime": 271.8999938964844,
+   "intensityType": "WARMUP",
+   "lapIndex": 1,
+   "lengthDTOs": [],
+   "maxElevation": 34.8,
+   "maxHR": 126.0,
+   "maxPower": 460.0,
+   "maxRespirationRate": 32.540000915527344,
+   "maxRunCadence": 156.0,
+   "maxSpeed": 3.5920000076293945,
+   "maxVerticalSpeed": 0.20000076293945312,
+   "messageIndex": 0,
+   "minElevation": 31.0,
+   "minPower": 114.0,
+   "movingDuration": 95.873,
+   "normalizedPower": 377.0,
+   "startTimeGMT": "2026-08-11T12:17:01.0",
+   "strideLength": 107.60000000000001,
+   "totalWork": 8.353182085049713,
+   "verticalOscillation": 11.950000000000001,
+   "verticalRatio": 11.319999694824219,
+   "wktIndex": 0,
+   "wktStepIndex": 0
+  },
+  {
+   "averageHR": 138.0,
+   "averageMovingSpeed": 2.9078191090387127,
+   "averagePower": 364.0,
+   "averageRunCadence": 154.96875,
+   "averageSpeed": 2.9079999923706055,
+   "avgGradeAdjustedSpeed": 2.9110000133514404,
+   "avgRespirationRate": 29.8700008392334,
+   "bmrCalories": 68.0,
+   "calories": 596.0,
+   "connectIQMeasurement": [],
+   "distance": 7664.47,
+   "duration": 2635.814,
+   "elapsedDuration": 2635.814,
+   "elevationGain": 50.0,
+   "elevationLoss": 58.0,
+   "groundContactBalanceLeft": 50.2599983215332,
+   "groundContactTime": 265.5,
+   "intensityType": "WARMUP",
+   "lapIndex": 2,
+   "lengthDTOs": [],
+   "maxElevation": 38.6,
+   "maxHR": 148.0,
+   "maxPower": 524.0,
+   "maxRespirationRate": 38.279998779296875,
+   "maxRunCadence": 188.0,
+   "maxSpeed": 3.7699999809265137,
+   "maxVerticalSpeed": 0.6000022888183594,
+   "messageIndex": 1,
+   "minElevation": 21.0,
+   "minPower": 226.0,
+   "movingDuration": 2635.814,
+   "normalizedPower": 366.0,
+   "startTimeGMT": "2026-08-11T12:18:37.0",
+   "strideLength": 112.7800048828125,
+   "totalWork": 228.87718913036215,
+   "verticalOscillation": 11.66999969482422,
+   "verticalRatio": 10.140000343322754
+  }
+ ]
+}

@@ -1,0 +1,82 @@
+{
+ "activityId": 23835562218,
+ "eventDTOs": [
+  {
+   "sectionTypeDTO": {
+    "id": 4,
+    "key": "timerTrigger",
+    "sectionTypeKey": "TIMER_TRIGGER"
+   },
+   "startTimeGMT": "2026-08-03T11:44:46.0",
+   "startTimeGMTDoubleValue": 1785757486000.0
+  },
+  {
+   "sectionTypeDTO": {
+    "id": 4,
+    "key": "timerTrigger",
+    "sectionTypeKey": "TIMER_TRIGGER"
+   },
+   "startTimeGMT": "2026-08-03T11:44:47.0",
+   "startTimeGMTDoubleValue": 1785757487000.0
+  },
+  {
+   "sectionTypeDTO": {
+    "id": 4,
+    "key": "timerTrigger",
+    "sectionTypeKey": "TIMER_TRIGGER"
+   },
+   "startTimeGMT": "2026-08-03T12:09:37.0",
+   "startTimeGMTDoubleValue": 1785758977000.0
+  },
+  {
+   "sectionTypeDTO": {
+    "id": 4,
+    "key": "timerTrigger",
+    "sectionTypeKey": "TIMER_TRIGGER"
+   },
+   "startTimeGMT": "2026-08-03T12:11:02.0",
+   "startTimeGMTDoubleValue": 1785759062000.0
+  }
+ ],
+ "lapDTOs": [
+  {
+   "averageHR": 139.0,
+   "averageMovingSpeed": 2.960879908650781,
+   "averagePower": 378.0,
+   "averageRunCadence": 158.546875,
+   "averageSpeed": 2.9570000171661373,
+   "avgGradeAdjustedSpeed": 3.01200008392334,
+   "avgRespirationRate": 25.90999984741211,
+   "bmrCalories": 81.0,
+   "calories": 710.0,
+   "connectIQMeasurement": [],
+   "distance": 9288.28,
+   "duration": 3140.964,
+   "elapsedDuration": 3226.605,
+   "elevationGain": 139.0,
+   "elevationLoss": 147.0,
+   "groundContactBalanceLeft": 49.900001525878906,
+   "groundContactTime": 260.29998779296875,
+   "intensityType": "INTERVAL",
+   "lapIndex": 1,
+   "lengthDTOs": [],
+   "maxElevation": 96.8,
+   "maxHR": 154.0,
+   "maxPower": 850.0,
+   "maxRespirationRate": 39.63999938964844,
+   "maxRunCadence": 219.0,
+   "maxSpeed": 6.420000076293945,
+   "maxVerticalSpeed": 1.0,
+   "messageIndex": 0,
+   "minElevation": 22.6,
+   "minPower": 0.0,
+   "movingDuration": 3137.0,
+   "normalizedPower": 382.0,
+   "startTimeGMT": "2026-08-03T11:44:47.0",
+   "strideLength": 111.85000000000001,
+   "totalWork": 283.29220385582886,
+   "verticalOscillation": 11.319999694824219,
+   "verticalRatio": 10.0
+  }
+ ]
+}
