@@ -594,7 +594,10 @@ def _reps_from_lap_intensity(laps: list[dict]) -> tuple[list[dict], list[dict]]:
     """
     labels = {lap.get("intensityType") for lap in laps}
     if len(labels) < 2:
-        return [], [{"source_type": next(iter(labels), None), "reason": "uniform_intensity"}]
+        # Same shape as every other "excluded" entry, so a consumer can read the
+        # list without checking which branch produced it.
+        uniform = {"source_type": next(iter(labels), None), "distance_m": None, "pace_per_km": None}
+        return [], [{**uniform, "reason": "uniform_intensity"}]
     work = [_fmt_rep(lap, "work", "intensityType") for lap in laps if lap.get("intensityType") in _LAP_WORK_TYPES]
     rest = [_fmt_rep(lap, "rest", "intensityType") for lap in laps if lap.get("intensityType") in _LAP_REST_TYPES]
     kept, dropped = _guard_work_reps(work, sum(lap.get("distance") or 0 for lap in laps))
@@ -916,7 +919,7 @@ def get_running_threshold() -> str:
 
 @mcp.tool()
 def get_activity_intervals(activity_id: str) -> str:
-    """Get the work reps of an interval session, with warm-up, rests and cool-down excluded.
+    """Get the work reps of an interval session, with warm-up and cool-down excluded.
 
     `activity_id` is the numeric id from list_recent_activities. Use this
     instead of get_activity_laps when you need what the reps were actually run
@@ -926,7 +929,8 @@ def get_activity_intervals(activity_id: str) -> str:
     recorded workout structure, preferred) or `garmin_intensity` (the lap
     intensity field, used only when an activity has no typed structure) — so
     the caller can see how certain the classification is. "reps" holds one
-    entry per work rep and rest, each with `is_work_rep`, distance_m,
+    entry per work rep and per rest between them — read `is_work_rep` rather
+    than assuming every entry is a rep — each with distance_m,
     duration_s, pace_per_km, avg/max HR. "work_summary" aggregates the work
     reps only (count, total distance, average/fastest/slowest pace, pace
     spread, HR). "excluded" lists what was dropped and why.

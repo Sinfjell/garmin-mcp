@@ -210,4 +210,45 @@ def test_uniform_lap_intensity_classifies_nothing(monkeypatch):
     result = json.loads(server.get_activity_intervals(CLEAN_1000))
     assert result["classified_by"] == "garmin_intensity"
     assert result["work_summary"]["count"] == 0
-    assert excluded_reasons(result) == ["uniform_intensity"]
+    assert result["excluded"] == [
+        {"source_type": "INTERVAL", "distance_m": None, "pace_per_km": None, "reason": "uniform_intensity"}
+    ]
+
+
+class SyntheticClient(FixtureClient):
+    """A typed-split payload assembled by hand, for shapes no real session provides."""
+
+    def __init__(self, splits):
+        super().__init__()
+        self._splits = splits
+
+    def get_activity_typed_splits(self, activity_id):
+        self.typed_split_calls.append(activity_id)
+        return {"activityId": activity_id, "splits": self._splits}
+
+
+def _split(split_type, distance_m, pace_min_per_km):
+    return {"type": split_type, "distance": distance_m, "duration": distance_m / 1000 * pace_min_per_km * 60}
+
+
+def test_mixed_rep_lengths_bias_towards_exclusion_and_say_so(monkeypatch):
+    """A pyramid session drops its slow half — deliberately, and visibly.
+
+    The pace guard measures against the median of all candidates, so a session
+    mixing 400s at 3:15 with 2000s at 4:10 reads the 2000s as outliers. That is
+    the wrong call for a pyramid, and the right bias for this tool: reporting a
+    cool-down as a rep is the failure it exists to prevent, and dropping in the
+    other direction is at least legible — every dropped rep is listed in
+    "excluded" with its pace. Change this and the 16.08 cool-down comes back.
+    """
+    splits = [_split("INTERVAL_WARMUP", 1000, 5.5)]
+    splits += [_split("INTERVAL_ACTIVE", 2000, 4 + 10 / 60) for _ in range(2)]
+    splits += [_split("INTERVAL_ACTIVE", 400, 3 + 15 / 60) for _ in range(4)]
+    monkeypatch.setattr(server, "get_client", lambda: SyntheticClient(splits))
+
+    result = json.loads(server.get_activity_intervals("synthetic"))
+    assert work_paces(result) == ["3:15", "3:15", "3:15", "3:15"]
+    assert [(e["distance_m"], e["pace_per_km"], e["reason"]) for e in result["excluded"]] == [
+        (2000.0, "4:10", "pace_outlier"),
+        (2000.0, "4:10", "pace_outlier"),
+    ]
