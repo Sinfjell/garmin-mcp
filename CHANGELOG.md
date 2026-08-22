@@ -7,6 +7,25 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- `get_running_threshold()` — lactate-threshold pace and LTHR with the date
+  Garmin measured them, plus the five heart-rate zones. Garmin returns only a
+  floor per zone, so the ceiling is derived (next floor minus one, zone 5 up to
+  max HR) rather than left for the caller to work out.
+- `get_activity_intervals(activity_id)` — the work reps of an interval session,
+  with warm-up, rests and cool-down excluded. Classification prefers Garmin's
+  recorded workout structure (`get_activity_typed_splits`) over the lap
+  `intensity` field, which mislabels in both directions: a 6x1000m session came
+  back with all thirteen laps tagged `INTERVAL`, and a track session tagged its
+  cool-down jog `ACTIVE`. `classified_by` reports which source was used, and
+  `excluded` lists what was dropped and why, so a thin classification is visible
+  rather than implied. An unstructured run returns zero reps rather than one rep
+  covering the whole activity — the activity's average pace is never a rep pace,
+  which is the failure this tool exists to make impossible.
+- `find_comparable_intervals(target_distance_m, ...)` — work reps of a given
+  distance across recent running activities, replacing list-activities →
+  laps-per-activity → filter-by-hand. Matches every Garmin running surface
+  (`track_running`, `trail_running`, `virtual_run`, …), not just `running`;
+  a prefix match drops exactly the structured track sessions worth comparing.
 - `garmin-mcp-tenant import <dir>` — adopt an existing `~/.garminconnect`
   directory as a new tenant, printing the finished connector URL. This is the
   route when Garmin refuses to let a server log in at all: Cloudflare blocks the

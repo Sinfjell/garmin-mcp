@@ -1,0 +1,402 @@
+[
+ {
+  "activityId": 24060441521,
+  "activityName": "Kristiansand L\u00f8ping",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 17,
+   "restricted": false,
+   "trimmable": true,
+   "typeId": 1,
+   "typeKey": "running"
+  },
+  "averageHR": 144.0,
+  "distance": 9437.3203125,
+  "duration": 3254.037109375,
+  "startTimeLocal": "2026-08-21 13:34:17"
+ },
+ {
+  "activityId": 24048644063,
+  "activityName": "Kristiansand L\u00f8ping",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 17,
+   "restricted": false,
+   "trimmable": true,
+   "typeId": 1,
+   "typeKey": "running"
+  },
+  "averageHR": 155.0,
+  "distance": 7795.7900390625,
+  "duration": 2246.951904296875,
+  "startTimeLocal": "2026-08-20 14:15:21"
+ },
+ {
+  "activityId": 24034340925,
+  "activityName": "Strength",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 29,
+   "restricted": false,
+   "trimmable": false,
+   "typeId": 13,
+   "typeKey": "strength_training"
+  },
+  "averageHR": 107.0,
+  "distance": 0.0,
+  "duration": 4001.8759765625,
+  "startTimeLocal": "2026-08-19 11:46:28"
+ },
+ {
+  "activityId": 24023840252,
+  "activityName": "Strength",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 29,
+   "restricted": false,
+   "trimmable": false,
+   "typeId": 13,
+   "typeKey": "strength_training"
+  },
+  "averageHR": 107.0,
+  "distance": 0.0,
+  "duration": 3833.135986328125,
+  "startTimeLocal": "2026-08-18 15:32:08"
+ },
+ {
+  "activityId": 23996955436,
+  "activityName": "Kristiansand Banel\u00f8p",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 1,
+   "restricted": false,
+   "trimmable": true,
+   "typeId": 8,
+   "typeKey": "track_running"
+  },
+  "averageHR": 150.0,
+  "distance": 8410.0,
+  "duration": 2668.2548828125,
+  "startTimeLocal": "2026-08-16 12:08:36"
+ },
+ {
+  "activityId": 23987930263,
+  "activityName": "Strength",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 29,
+   "restricted": false,
+   "trimmable": false,
+   "typeId": 13,
+   "typeKey": "strength_training"
+  },
+  "averageHR": 100.0,
+  "distance": 0.0,
+  "duration": 3545.93994140625,
+  "startTimeLocal": "2026-08-15 16:04:58"
+ },
+ {
+  "activityId": 23983799624,
+  "activityName": "Lillesand Tennis",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 219,
+   "restricted": false,
+   "trimmable": true,
+   "typeId": 227,
+   "typeKey": "tennis_v2"
+  },
+  "averageHR": 120.0,
+  "distance": 3413.85009765625,
+  "duration": 5040.60400390625,
+  "startTimeLocal": "2026-08-15 10:10:38"
+ },
+ {
+  "activityId": 23974159263,
+  "activityName": "Strength",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 29,
+   "restricted": false,
+   "trimmable": false,
+   "typeId": 13,
+   "typeKey": "strength_training"
+  },
+  "averageHR": 104.0,
+  "distance": 0.0,
+  "duration": 3511.1630859375,
+  "startTimeLocal": "2026-08-14 13:46:35"
+ },
+ {
+  "activityId": 23952069220,
+  "activityName": "Lillesand Tennis",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 219,
+   "restricted": false,
+   "trimmable": true,
+   "typeId": 227,
+   "typeKey": "tennis_v2"
+  },
+  "averageHR": 120.0,
+  "distance": 3622.050048828125,
+  "duration": 4875.96484375,
+  "startTimeLocal": "2026-08-12 17:22:27"
+ },
+ {
+  "activityId": 23946960023,
+  "activityName": "Strength",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 29,
+   "restricted": false,
+   "trimmable": false,
+   "typeId": 13,
+   "typeKey": "strength_training"
+  },
+  "averageHR": 112.0,
+  "distance": 0.0,
+  "duration": 3361.341064453125,
+  "startTimeLocal": "2026-08-12 10:36:10"
+ },
+ {
+  "activityId": 23935979150,
+  "activityName": "Kristiansand L\u00f8ping",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 17,
+   "restricted": false,
+   "trimmable": true,
+   "typeId": 1,
+   "typeKey": "running"
+  },
+  "averageHR": 137.0,
+  "distance": 7922.22021484375,
+  "duration": 2731.68701171875,
+  "startTimeLocal": "2026-08-11 14:17:01"
+ },
+ {
+  "activityId": 23923405184,
+  "activityName": "Strength",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 29,
+   "restricted": false,
+   "trimmable": false,
+   "typeId": 13,
+   "typeKey": "strength_training"
+  },
+  "averageHR": 105.0,
+  "distance": 0.0,
+  "duration": 3918.006103515625,
+  "startTimeLocal": "2026-08-10 14:54:48"
+ },
+ {
+  "activityId": 23897987073,
+  "activityName": "Strength",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 29,
+   "restricted": false,
+   "trimmable": false,
+   "typeId": 13,
+   "typeKey": "strength_training"
+  },
+  "averageHR": 93.0,
+  "distance": 0.0,
+  "duration": 3959.3759765625,
+  "startTimeLocal": "2026-08-08 12:19:55"
+ },
+ {
+  "activityId": 23885353686,
+  "activityName": "Kristiansand L\u00f8ping",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 17,
+   "restricted": false,
+   "trimmable": true,
+   "typeId": 1,
+   "typeKey": "running"
+  },
+  "averageHR": 156.0,
+  "distance": 10693.8798828125,
+  "duration": 3143.31005859375,
+  "startTimeLocal": "2026-08-07 11:48:44"
+ },
+ {
+  "activityId": 23862841106,
+  "activityName": "Strength",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 29,
+   "restricted": false,
+   "trimmable": false,
+   "typeId": 13,
+   "typeKey": "strength_training"
+  },
+  "averageHR": 99.0,
+  "distance": 0.0,
+  "duration": 3543.8720703125,
+  "startTimeLocal": "2026-08-05 15:19:47"
+ },
+ {
+  "activityId": 23849574186,
+  "activityName": "Strength",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 29,
+   "restricted": false,
+   "trimmable": false,
+   "typeId": 13,
+   "typeKey": "strength_training"
+  },
+  "averageHR": 105.0,
+  "distance": 0.0,
+  "duration": 2979.26806640625,
+  "startTimeLocal": "2026-08-04 15:14:38"
+ },
+ {
+  "activityId": 23835562218,
+  "activityName": "Kristiansand L\u00f8ping",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 17,
+   "restricted": false,
+   "trimmable": true,
+   "typeId": 1,
+   "typeKey": "running"
+  },
+  "averageHR": 139.0,
+  "distance": 9288.2802734375,
+  "duration": 3140.964111328125,
+  "startTimeLocal": "2026-08-03 13:44:47"
+ },
+ {
+  "activityId": 23828401708,
+  "activityName": "Strength",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 29,
+   "restricted": false,
+   "trimmable": false,
+   "typeId": 13,
+   "typeKey": "strength_training"
+  },
+  "averageHR": 97.0,
+  "distance": 0.0,
+  "duration": 3789.68505859375,
+  "startTimeLocal": "2026-08-02 19:34:19"
+ },
+ {
+  "activityId": 23823428717,
+  "activityName": "Kristiansand L\u00f8ping",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 17,
+   "restricted": false,
+   "trimmable": true,
+   "typeId": 1,
+   "typeKey": "running"
+  },
+  "averageHR": 152.0,
+  "distance": 9194.349609375,
+  "duration": 2643.47509765625,
+  "startTimeLocal": "2026-08-02 12:45:47"
+ },
+ {
+  "activityId": 23811635853,
+  "activityName": "Hjartdal Fotturer",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 17,
+   "restricted": false,
+   "trimmable": true,
+   "typeId": 3,
+   "typeKey": "hiking"
+  },
+  "averageHR": 115.0,
+  "distance": 4621.080078125,
+  "duration": 4977.92578125,
+  "startTimeLocal": "2026-08-01 12:48:20"
+ },
+ {
+  "activityId": 23786779225,
+  "activityName": "Strength",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 29,
+   "restricted": false,
+   "trimmable": false,
+   "typeId": 13,
+   "typeKey": "strength_training"
+  },
+  "averageHR": 100.0,
+  "distance": 0.0,
+  "duration": 3788.906005859375,
+  "startTimeLocal": "2026-07-30 11:29:07"
+ },
+ {
+  "activityId": 23763370033,
+  "activityName": "Padel",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 219,
+   "restricted": false,
+   "trimmable": true,
+   "typeId": 226,
+   "typeKey": "paddelball"
+  },
+  "averageHR": 142.0,
+  "distance": 717.9099731445312,
+  "duration": 6177.39794921875,
+  "startTimeLocal": "2026-07-28 14:02:15"
+ },
+ {
+  "activityId": 23761795356,
+  "activityName": "Strength",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 29,
+   "restricted": false,
+   "trimmable": false,
+   "typeId": 13,
+   "typeKey": "strength_training"
+  },
+  "averageHR": 99.0,
+  "distance": 0.0,
+  "duration": 3915.988037109375,
+  "startTimeLocal": "2026-07-28 12:32:26"
+ },
+ {
+  "activityId": 23742559606,
+  "activityName": "Kristiansand Tennis",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 219,
+   "restricted": false,
+   "trimmable": true,
+   "typeId": 227,
+   "typeKey": "tennis_v2"
+  },
+  "averageHR": 124.0,
+  "distance": 3628.320068359375,
+  "duration": 4286.087890625,
+  "startTimeLocal": "2026-07-26 18:59:06"
+ },
+ {
+  "activityId": 23735046444,
+  "activityName": "Kristiansand Tennis",
+  "activityType": {
+   "isHidden": false,
+   "parentTypeId": 219,
+   "restricted": false,
+   "trimmable": true,
+   "typeId": 227,
+   "typeKey": "tennis_v2"
+  },
+  "averageHR": 123.0,
+  "distance": 3918.699951171875,
+  "duration": 5149.7529296875,
+  "startTimeLocal": "2026-07-26 08:29:42"
+ }
+]
