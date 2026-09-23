@@ -10,13 +10,37 @@ import logging
 from typing import Any
 from urllib.parse import parse_qs
 
+from mcp.server.transport_security import TransportSecuritySettings
+
 from garmin_mcp import multitenant
-from garmin_mcp.oauth.config import OAuthConfig
+from garmin_mcp.oauth.config import OAuthConfig, resolve_allowed_origins
 from garmin_mcp.oauth.errors import OAuthError, StateMismatchError, TokenExchangeError
 from garmin_mcp.oauth.flow import build_authorization_url, exchange_code
 from garmin_mcp.oauth.tokens import TokenStore
 
 log = logging.getLogger(__name__)
+
+
+def _apply_oauth_transport_security(mcp: Any, config: OAuthConfig) -> None:
+    """Widen FastMCP DNS-rebinding Host allowlist for the public reverse-proxy Host.
+
+    Binding to 127.0.0.1 makes FastMCP auto-allow only localhost Host headers.
+    Nginx forwards ``Host: productivitytech.io``, which then returns 421 unless
+    the public hostname (from ``GARMIN_OAUTH_PUBLIC_BASE_URL`` / optional
+    ``GARMIN_OAUTH_ALLOWED_HOSTS``) is listed. Protection stays enabled — only
+    the allowlist grows. Localhost patterns remain so direct bind curls work.
+    """
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(config.allowed_hosts),
+        allowed_origins=list(resolve_allowed_origins(config.public_base_url, config.allowed_hosts)),
+    )
+    mcp.settings.transport_security = security
+    # streamable_http_app() lazily creates a session manager that captures
+    # security_settings once and whose .run() may only start once. Drop any
+    # prior manager (e.g. leftover from another test or a previous bind) so
+    # oauth boots with the widened allowlist and a fresh lifespan.
+    mcp._session_manager = None
 
 
 def _json_response(send: Any, status: int, body: dict) -> Any:
@@ -68,6 +92,7 @@ def build_oauth_app(mcp: Any, config: OAuthConfig) -> Any:
     multitenant.activate_multi_tenant()
     mcp.settings.stateless_http = True
     mcp.settings.streamable_http_path = "/mcp"
+    _apply_oauth_transport_security(mcp, config)
     inner_app = mcp.streamable_http_app()
 
     async def app(scope: dict, receive: Any, send: Any) -> None:

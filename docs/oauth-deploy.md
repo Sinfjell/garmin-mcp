@@ -26,6 +26,11 @@ export GARMIN_OAUTH_CLIENT_ID=...          # from Garmin portal / 1Password
 export GARMIN_OAUTH_CLIENT_SECRET=...
 export GARMIN_OAUTH_REDIRECT_URI=https://productivitytech.io/garmin-oauth/callback
 export GARMIN_OAUTH_PUBLIC_BASE_URL=https://productivitytech.io
+# Optional: extra Host headers for MCP DNS-rebinding allowlist (www, etc.).
+# PUBLIC_BASE_URL's hostname is always included; localhost stays allowed for
+# direct curls to the bind. Prefer this app-side allowlist over rewriting Host
+# in nginx (which also works but hides the public name from the app).
+# export GARMIN_OAUTH_ALLOWED_HOSTS=www.productivitytech.io
 export GARMIN_OAUTH_TOKEN_ROOT=$HOME/.garmin-oauth-tokens   # EU-local disk
 export GARMIN_OAUTH_PATH_PREFIX=/garmin-oauth
 ```
@@ -61,6 +66,7 @@ Environment=GARMIN_OAUTH_CLIENT_ID=...
 Environment=GARMIN_OAUTH_CLIENT_SECRET=...
 Environment=GARMIN_OAUTH_REDIRECT_URI=https://productivitytech.io/garmin-oauth/callback
 Environment=GARMIN_OAUTH_PUBLIC_BASE_URL=https://productivitytech.io
+# Optional: Environment=GARMIN_OAUTH_ALLOWED_HOSTS=www.productivitytech.io
 Environment=GARMIN_OAUTH_TOKEN_ROOT=/var/www/vhosts/productivitytech.io/.garmin-oauth-tokens
 Environment=GARMIN_OAUTH_PATH_PREFIX=/garmin-oauth
 # uvx caches builds: use --refresh when deploying a new git revision
@@ -92,6 +98,33 @@ location /garmin-oauth/ {
     proxy_buffering off;
 }
 ```
+
+FastMCP enables DNS-rebinding protection when bound to localhost and would
+otherwise reject a public `Host` with **421 Invalid Host**. OAuth mode widens
+the allowlist from `GARMIN_OAUTH_PUBLIC_BASE_URL` (and optional
+`GARMIN_OAUTH_ALLOWED_HOSTS`) while keeping protection on. Alternative: have
+nginx rewrite `Host` to `127.0.0.1` — we prefer the app-side allowlist so the
+public hostname stays visible to the process.
+
+### Smoke: public Host must not 421
+
+After deploy, with a real connector user-id (or any path that reaches the MCP
+transport — a 404 from our router is fine for host checks only if you hit
+`/mcp` after rewrite; easier is an existing tenant URL):
+
+```bash
+# Expect JSON-RPC / MCP response, NOT "Invalid Host header" with status 421
+curl -sS -o /tmp/mcp-out -w '%{http_code}\n' \
+  -H 'Host: productivitytech.io' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}' \
+  https://productivitytech.io/garmin-oauth/<user-id>/mcp
+```
+
+A `421` body of `Invalid Host header` means the allowlist did not include the
+Host nginx forwarded — check `GARMIN_OAUTH_PUBLIC_BASE_URL` / `ALLOWED_HOSTS`
+and restart with `uvx --refresh`.
 
 ## Portal URLs to register
 

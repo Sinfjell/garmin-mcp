@@ -6,6 +6,14 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- OAuth streamable-http no longer returns **421 Invalid Host** when nginx
+  forwards `Host: productivitytech.io` (or whatever
+  `GARMIN_OAUTH_PUBLIC_BASE_URL` names). FastMCP's localhost DNS-rebinding
+  allowlist is widened from that hostname plus optional
+  `GARMIN_OAUTH_ALLOWED_HOSTS`; protection stays on. Localhost Hosts remain
+  allowed for direct bind curls. See `docs/oauth-deploy.md`.
+
 ### Added
 - Official Garmin Connect Developer Program OAuth 2.0 PKCE path behind
   `GARMIN_AUTH_MODE=oauth` (default remains `session`). Separate HTTP entry
