@@ -83,6 +83,8 @@ def _success_html(mcp_url: str) -> str:
     )
 
 
+
+
 def build_oauth_app(mcp: Any, config: OAuthConfig) -> Any:
     """ASGI app: authorize, callback, ping/push stubs, and per-user MCP."""
     store = TokenStore(config.token_root)
