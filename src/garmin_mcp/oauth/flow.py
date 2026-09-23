@@ -47,7 +47,17 @@ def _token_request(config: OAuthConfig, data: dict[str, str], *, http: httpx.Cli
         if owns:
             client.close()
     if response.status_code >= 400:
-        raise TokenExchangeError(response.status_code)
+        # Capture only OAuth error *codes* (never the body — it can echo form fields).
+        err_code = None
+        try:
+            payload = response.json()
+            if isinstance(payload, dict):
+                raw = payload.get("error")
+                if isinstance(raw, str) and raw.isascii() and len(raw) <= 64:
+                    err_code = raw
+        except Exception:
+            err_code = None
+        raise TokenExchangeError(response.status_code, error_code=err_code)
     return response.json()
 
 
