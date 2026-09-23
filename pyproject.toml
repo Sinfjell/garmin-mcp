@@ -32,6 +32,9 @@ dependencies = [
     # form; without it the form posts fail at runtime, not at import.
     "fastapi>=0.110,<1",
     "python-multipart>=0.0.9,<1",
+    # Official OAuth path (GARMIN_AUTH_MODE=oauth): token exchange + wellness API.
+    # Also pulled transitively by mcp; declared so the ceiling is explicit.
+    "httpx>=0.27,<1",
 ]
 
 [project.optional-dependencies]

@@ -37,11 +37,13 @@ def _reset_client_caches(monkeypatch):
     monkeypatch.setattr(server, "Garmin", FakeGarmin)
     server._client = None
     server._tenant_clients.clear()
+    server._oauth_clients.clear()
     # Process-global flag: reset so each test is order-independent.
     multitenant._multi_tenant_active = False
     yield
     server._client = None
     server._tenant_clients.clear()
+    server._oauth_clients.clear()
     multitenant._multi_tenant_active = False
 
 

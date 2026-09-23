@@ -7,6 +7,14 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- Official Garmin Connect Developer Program OAuth 2.0 PKCE path behind
+  `GARMIN_AUTH_MODE=oauth` (default remains `session`). Separate HTTP entry
+  for authorize/callback, Ping/Push webhook stubs, and per-user MCP under
+  `/garmin-oauth/<user-id>/mcp`. Health + Activity pull only; tools that need
+  training status / lactate threshold / personal records return a clear
+  «not available via official API» error. Deploy notes for a **new** systemd
+  unit on port 8770: `docs/oauth-deploy.md`. Does not migrate or touch live
+  unofficial connectors.
 - `get_running_threshold()` — lactate-threshold pace and LTHR with the date
   Garmin measured them, plus the five heart-rate zones. Garmin returns only a
   floor per zone, so the ceiling is derived (next floor minus one, zone 5 up to
