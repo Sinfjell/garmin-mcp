@@ -109,6 +109,15 @@ should use `garmin-mcp-auth` instead.
 **Token cache location:** `~/.garminconnect` by default, or the path in
 `GARMIN_TOKENS` if set.
 
+### Official OAuth (eval / prod-candidate instance)
+
+Set `GARMIN_AUTH_MODE=oauth` and the `GARMIN_OAUTH_*` variables in
+`.env.example` to run a **separate** instance against the Garmin Connect
+Developer Program (OAuth 2.0 PKCE, Health + Activity APIs only). This does not
+replace the default session path. Deploy notes and a smoke checklist:
+[`docs/oauth-deploy.md`](docs/oauth-deploy.md). Training status, lactate
+threshold, and personal records are not available via official APIs.
+
 ## Remote / hosted mode (use from Claude mobile & web)
 
 By default this server speaks stdio and is meant to run as a local subprocess

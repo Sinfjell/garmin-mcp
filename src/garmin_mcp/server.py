@@ -19,6 +19,10 @@ from garminconnect import Garmin, GarminConnectAuthenticationError
 from mcp.server.fastmcp import FastMCP
 
 from garmin_mcp import multitenant
+from garmin_mcp.oauth import OfficialApiUnavailableError
+from garmin_mcp.oauth.client import OfficialGarminClient
+from garmin_mcp.oauth.config import AUTH_MODE_OAUTH, is_oauth_mode, load_oauth_config
+from garmin_mcp.oauth.tokens import TokenStore
 
 mcp = FastMCP("garmin")
 
@@ -27,6 +31,9 @@ _client: Garmin | None = None
 # Multi-tenant clients, keyed by token store. Separate from `_client` so the
 # single-tenant cache can never be handed to a tenant request, or vice versa.
 _tenant_clients: dict[str, Garmin] = {}
+
+# Official OAuth clients, keyed by token-store directory (same isolation story).
+_oauth_clients: dict[str, OfficialGarminClient] = {}
 
 # "Today" always means the user's local calendar day, but this server may run on
 # a UTC host. Resolving in UTC would push a late-evening session onto the next
@@ -76,11 +83,38 @@ def _tenant_client(tokenstore: str) -> Garmin:
     return client
 
 
-def get_client() -> Garmin:
-    """Return a lazily-initialized, cached Garmin Connect client."""
+def _oauth_client(token_dir: str) -> OfficialGarminClient:
+    """Official API client for one oauth tenant, from their token directory only."""
+    cached = _oauth_clients.get(token_dir)
+    if cached is not None:
+        return cached
+    config = load_oauth_config()
+    store = TokenStore(config.token_root)
+    # token_dir is <root>/<user-id>; the user id is the directory name.
+    user_id = Path(token_dir).name
+    client = OfficialGarminClient(config, store, user_id)
+    _oauth_clients[token_dir] = client
+    return client
+
+
+def get_client() -> Garmin | OfficialGarminClient:
+    """Return a lazily-initialized, cached Garmin client (session or oauth)."""
     global _client
 
     tenant_store = multitenant.current_token_store()
+
+    if is_oauth_mode():
+        # OAuth mode is always store-bound: no env-credential fallback, and no
+        # host-wide session. An unbound store means the request was not routed.
+        if tenant_store is None:
+            if multitenant.multi_tenant_active():
+                raise RuntimeError("No tenant token store bound for this request.")
+            raise RuntimeError(
+                "OAuth mode requires streamable-http with a per-user path "
+                "(complete /authorize first), or a bound token store."
+            )
+        return _oauth_client(tenant_store)
+
     if tenant_store is not None:
         return _tenant_client(tenant_store)
 
@@ -113,7 +147,7 @@ def get_client() -> Garmin:
     raise RuntimeError(_AUTH_HELP)
 
 
-def _tool_call(build: Callable[[Garmin], Any]) -> str:
+def _tool_call(build: Callable[[Any], Any]) -> str:
     """Run a tool body against the Garmin client, returning compact JSON.
 
     Any failure (auth expired, network error, bad input) is captured and
@@ -123,6 +157,8 @@ def _tool_call(build: Callable[[Garmin], Any]) -> str:
     try:
         data = build(get_client())
         return json.dumps(data, default=str, separators=(",", ":"))
+    except OfficialApiUnavailableError as exc:
+        return json.dumps({"error": str(exc), "auth_mode": AUTH_MODE_OAUTH})
     except GarminConnectAuthenticationError:
         return json.dumps({"error": "Garmin authentication expired. Run `garmin-mcp-auth` to log in again."})
     except Exception as exc:  # noqa: BLE001 - always return JSON, never raise to the client
@@ -998,6 +1034,23 @@ def _run_multi_tenant(root: Path, host: str, port: int, prefix: str) -> None:
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
+def _run_oauth(host: str, port: int, path_prefix: str | None) -> None:
+    """Serve the official-OAuth eval instance (authorize, callback, webhooks, MCP)."""
+    import uvicorn
+
+    from garmin_mcp.oauth.app import build_oauth_app
+
+    config = load_oauth_config()
+    # Allow --path to override the env prefix for a one-off bind without editing env.
+    if path_prefix:
+        from dataclasses import replace
+
+        prefix = path_prefix if path_prefix.startswith("/") else f"/{path_prefix}"
+        config = replace(config, path_prefix="/" + prefix.strip("/"))
+    app = build_oauth_app(mcp, config)
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
 def _print_tool_list() -> None:
     for tool in asyncio.run(mcp.list_tools()):
         first_line = (tool.description or "").strip().splitlines()[0] if tool.description else ""
@@ -1036,7 +1089,9 @@ def main() -> None:
         "unguessable value to use as a lightweight secret when hosting remotely. In "
         f"multi-tenant mode ({multitenant.MULTI_TENANT_ROOT_ENV} set) this is instead the "
         "prefix each user's endpoint hangs off (default: /u), giving <prefix>/<user-id>/mcp "
-        "— there the user ID carries the secrecy, so the prefix need not.",
+        "— there the user ID carries the secrecy, so the prefix need not. In oauth mode "
+        "(GARMIN_AUTH_MODE=oauth) this overrides GARMIN_OAUTH_PATH_PREFIX (default "
+        "/garmin-oauth).",
     )
     args = parser.parse_args()
 
@@ -1047,11 +1102,21 @@ def main() -> None:
     if args.transport == "streamable-http":
         mcp.settings.host = args.host
         mcp.settings.port = args.port
+        if is_oauth_mode():
+            # Separate from session multi-tenant: do not read GARMIN_MULTI_TENANT_ROOT.
+            _run_oauth(args.host, args.port, args.path)
+            return
         root = multitenant.multi_tenant_root()
         if root is not None:
             _run_multi_tenant(root, args.host, args.port, args.path or "/u")
             return
         mcp.settings.streamable_http_path = args.path or "/mcp"
+
+    if is_oauth_mode() and args.transport == "stdio":
+        raise SystemExit(
+            "GARMIN_AUTH_MODE=oauth requires --transport streamable-http "
+            "(authorize/callback/webhooks need HTTP)."
+        )
 
     mcp.run(transport=args.transport)
 
