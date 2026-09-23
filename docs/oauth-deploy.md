@@ -86,6 +86,9 @@ location /garmin-oauth/ {
     proxy_pass http://127.0.0.1:8770;
     proxy_http_version 1.1;
     proxy_set_header Host $host;
+    # Keep the public Host. garmin-mcp allows it via
+    # GARMIN_OAUTH_PUBLIC_BASE_URL (MCP DNS-rebinding allowlist). Do NOT rewrite
+    # Host to 127.0.0.1:8771 — that breaks absolute callback/connector URLs.
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
     # MCP streamable HTTP may use SSE

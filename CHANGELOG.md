@@ -6,6 +6,9 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Fixed
+- OAuth streamable-http: allow Host from `GARMIN_OAUTH_PUBLIC_BASE_URL` through MCP DNS-rebinding protection so nginx can forward `Host: productivitytech.io` without HTTP 421 (eval connector URL).
+
 ### Added
 - Official Garmin Connect Developer Program OAuth 2.0 PKCE path behind
   `GARMIN_AUTH_MODE=oauth` (default remains `session`). Separate HTTP entry
