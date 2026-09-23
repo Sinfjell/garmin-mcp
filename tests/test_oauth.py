@@ -331,6 +331,66 @@ def test_session_mode_still_default(monkeypatch):
     assert oauth_config.is_oauth_mode() is False
 
 
+def test_allowed_hosts_derived_from_public_base_url(oauth_env, monkeypatch):
+    assert "example.test" in oauth_env.allowed_hosts
+    assert "example.test:*" in oauth_env.allowed_hosts
+    assert "127.0.0.1:*" in oauth_env.allowed_hosts
+    monkeypatch.setenv("GARMIN_OAUTH_ALLOWED_HOSTS", "www.example.test, Other.Example.Test")
+    cfg = oauth_config.load_oauth_config()
+    assert "www.example.test" in cfg.allowed_hosts
+    assert "other.example.test" in cfg.allowed_hosts
+
+
+def test_oauth_mcp_accepts_public_host_rejects_foreign(oauth_env):
+    """FastMCP DNS-rebinding: public Host from PUBLIC_BASE_URL must not 421."""
+    import time
+
+    from starlette.testclient import TestClient
+
+    from garmin_mcp.oauth.app import build_oauth_app
+    from garmin_mcp.oauth.tokens import TokenBundle, TokenStore
+
+    user_id = "a" * 40
+    store = TokenStore(oauth_env.token_root)
+    store.save_tokens(
+        user_id,
+        TokenBundle(
+            access_token="a",
+            refresh_token="r",
+            expires_at=time.time() + 10_000,
+            refresh_expires_at=None,
+            garmin_user_id="g",
+        ),
+    )
+
+    app = build_oauth_app(server.mcp, oauth_env)
+    path = f"/garmin-oauth/{user_id}/mcp"
+    body = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0"},
+        },
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+
+    # One lifespan: public Host via base_url, foreign Host via header override.
+    with TestClient(app, base_url="http://example.test") as client:
+        ok = client.post(path, json=body, headers=headers)
+        assert ok.status_code != 421, ok.text
+        assert "Invalid Host" not in ok.text
+
+        bad = client.post(path, json=body, headers={**headers, "host": "evil.example"})
+        assert bad.status_code == 421
+        assert "Invalid Host" in bad.text
+
+
 def test_oauth_http_authorize_and_webhook_stubs(oauth_env):
     from starlette.testclient import TestClient
 

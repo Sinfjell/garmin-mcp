@@ -10,13 +10,37 @@ import logging
 from typing import Any
 from urllib.parse import parse_qs
 
+from mcp.server.transport_security import TransportSecuritySettings
+
 from garmin_mcp import multitenant
-from garmin_mcp.oauth.config import OAuthConfig
+from garmin_mcp.oauth.config import OAuthConfig, resolve_allowed_origins
 from garmin_mcp.oauth.errors import OAuthError, StateMismatchError, TokenExchangeError
 from garmin_mcp.oauth.flow import build_authorization_url, exchange_code
 from garmin_mcp.oauth.tokens import TokenStore
 
 log = logging.getLogger(__name__)
+
+
+def _apply_oauth_transport_security(mcp: Any, config: OAuthConfig) -> None:
+    """Widen FastMCP DNS-rebinding Host allowlist for the public reverse-proxy Host.
+
+    Binding to 127.0.0.1 makes FastMCP auto-allow only localhost Host headers.
+    Nginx forwards ``Host: productivitytech.io``, which then returns 421 unless
+    the public hostname (from ``GARMIN_OAUTH_PUBLIC_BASE_URL`` / optional
+    ``GARMIN_OAUTH_ALLOWED_HOSTS``) is listed. Protection stays enabled — only
+    the allowlist grows. Localhost patterns remain so direct bind curls work.
+    """
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=list(config.allowed_hosts),
+        allowed_origins=list(resolve_allowed_origins(config.public_base_url, config.allowed_hosts)),
+    )
+    mcp.settings.transport_security = security
+    # streamable_http_app() lazily creates a session manager that captures
+    # security_settings once and whose .run() may only start once. Drop any
+    # prior manager (e.g. leftover from another test or a previous bind) so
+    # oauth boots with the widened allowlist and a fresh lifespan.
+    mcp._session_manager = None
 
 
 def _json_response(send: Any, status: int, body: dict) -> Any:
@@ -59,45 +83,6 @@ def _success_html(mcp_url: str) -> str:
     )
 
 
-def _public_hostname(public_base_url: str) -> str | None:
-    """Hostname from GARMIN_OAUTH_PUBLIC_BASE_URL, or None if unparseable."""
-    from urllib.parse import urlparse
-
-    host = urlparse(public_base_url).hostname
-    return host or None
-
-
-def apply_transport_host_allowlist(mcp: Any, public_base_url: str) -> None:
-    """Allow the public hostname through MCP DNS-rebinding protection.
-
-    FastMCP auto-allows only localhost when bound to 127.0.0.1. Behind nginx
-    that forwards Host: productivitytech.io, that guard returns HTTP 421.
-    Prefer keeping the real Host (so absolute URLs stay correct) and widening
-    the allowlist from GARMIN_OAUTH_PUBLIC_BASE_URL.
-    """
-    from mcp.server.transport_security import TransportSecuritySettings
-
-    host = _public_hostname(public_base_url)
-    allowed_hosts = ["127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*", "[::1]", "[::1]:*"]
-    allowed_origins = [
-        "http://127.0.0.1:*",
-        "http://localhost:*",
-        "http://[::1]:*",
-    ]
-    if host:
-        allowed_hosts.extend([host, f"{host}:*"])
-        allowed_origins.append(f"https://{host}")
-        allowed_origins.append(f"http://{host}")
-        if not host.startswith("www."):
-            www = f"www.{host}"
-            allowed_hosts.extend([www, f"{www}:*"])
-            allowed_origins.append(f"https://{www}")
-            allowed_origins.append(f"http://{www}")
-    mcp.settings.transport_security = TransportSecuritySettings(
-        enable_dns_rebinding_protection=True,
-        allowed_hosts=allowed_hosts,
-        allowed_origins=allowed_origins,
-    )
 
 
 def build_oauth_app(mcp: Any, config: OAuthConfig) -> Any:
@@ -109,7 +94,7 @@ def build_oauth_app(mcp: Any, config: OAuthConfig) -> Any:
     multitenant.activate_multi_tenant()
     mcp.settings.stateless_http = True
     mcp.settings.streamable_http_path = "/mcp"
-    apply_transport_host_allowlist(mcp, config.public_base_url)
+    _apply_oauth_transport_security(mcp, config)
     inner_app = mcp.streamable_http_app()
 
     async def app(scope: dict, receive: Any, send: Any) -> None:
