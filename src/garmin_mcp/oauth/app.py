@@ -135,7 +135,7 @@ def build_oauth_app(mcp: Any, config: OAuthConfig) -> Any:
                 await _html_response(send, 400, "<h1>Invalid or expired OAuth state</h1>")
                 return
             except TokenExchangeError as exc:
-                log.error("token exchange failed: %s", type(exc).__name__)
+                log.error("token exchange failed: %s", exc)
                 await _html_response(send, 502, "<h1>Token exchange failed</h1>")
                 return
             except OAuthError as exc:

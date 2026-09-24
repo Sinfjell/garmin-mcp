@@ -12,10 +12,16 @@ class StateMismatchError(OAuthError):
 class TokenExchangeError(OAuthError):
     """Token endpoint returned a non-success status."""
 
-    def __init__(self, status_code: int):
+    def __init__(self, status_code: int, error_code: str | None = None):
         # Do not embed the response body: it can echo form fields.
-        super().__init__(f"token endpoint returned HTTP {status_code}")
         self.status_code = status_code
+        self.error_code = error_code
+        if error_code:
+            super().__init__(
+                f"token endpoint returned HTTP {status_code} error={error_code}"
+            )
+        else:
+            super().__init__(f"token endpoint returned HTTP {status_code}")
 
 
 class OfficialApiUnavailableError(Exception):
