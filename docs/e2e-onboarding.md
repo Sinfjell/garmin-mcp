@@ -11,13 +11,13 @@ creates a token store, and step 6, which deletes one.
 ## Prerequisites
 
 ```bash
-BASE=https://productivitytech.io          # the host serving the onboarding page
+BASE=https://mcp.productivitytech.io          # the host serving the onboarding page
 ONBOARD=$BASE/<onboarding-path>           # onboarding page (nginx location)
 
 # The already-running single-tenant connector, whose behaviour must not change.
 # It is a credential — read it off the host rather than pasting it around:
 #   sudo grep -o -- '--path [^ ]*' /etc/systemd/system/garmin-mcp.service
-EXISTING_CONNECTOR_URL=https://productivitytech.io/<existing-secret-path>/mcp
+EXISTING_CONNECTOR_URL=https://mcp.productivitytech.io/<existing-secret-path>/mcp
 
 # Where the multi-tenant unit keeps per-user token stores (its
 # GARMIN_MULTI_TENANT_ROOT), needed for steps 5 and 6.
@@ -64,7 +64,7 @@ IP is not the one Garmin is refusing. They send you that directory.
 ```bash
 garmin-mcp-tenant import ./their-garminconnect
 # -> Imported as <user-id>
-# -> https://productivitytech.io/garmin-u/<user-id>/mcp
+# -> https://mcp.productivitytech.io/garmin-u/<user-id>/mcp
 ```
 
 Continue from step 3 with that URL. Everything below is identical either way.

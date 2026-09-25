@@ -6,7 +6,13 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Changed
+- Docs and `.env.example` point hosted endpoints at `mcp.productivitytech.io`;
+  productivitytech.io itself moves to Vercel and no longer serves MCP routes.
+
 ### Fixed
+- Test for the OAuth Host allowlist ported to `build_oauth_app` after #28 replaced
+  `apply_transport_host_allowlist`; CI on main was red since 2026-09-23.
 - OAuth streamable-http no longer returns **421 Invalid Host** when nginx
   forwards `Host: productivitytech.io` (or whatever
   `GARMIN_OAUTH_PUBLIC_BASE_URL` names). FastMCP's localhost DNS-rebinding
