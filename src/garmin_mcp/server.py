@@ -110,8 +110,8 @@ def get_client() -> Garmin | OfficialGarminClient:
             if multitenant.multi_tenant_active():
                 raise RuntimeError("No tenant token store bound for this request.")
             raise RuntimeError(
-                "OAuth mode requires streamable-http with a per-user path "
-                "(complete /authorize first), or a bound token store."
+                "OAuth mode requires streamable-http and a bearer token issued "
+                "by this server's authorization flow."
             )
         return _oauth_client(tenant_store)
 

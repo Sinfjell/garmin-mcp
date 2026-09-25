@@ -366,7 +366,8 @@ def test_oauth_mcp_accepts_public_host_rejects_foreign(oauth_env):
     )
 
     app = build_oauth_app(server.mcp, oauth_env)
-    path = f"/garmin-oauth/{user_id}/mcp"
+    path = "/garmin-oauth/mcp"
+    bearer = "Bearer " + app.auth_provider._issue_tokens("test-client", user_id, []).access_token
     body = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -380,6 +381,7 @@ def test_oauth_mcp_accepts_public_host_rejects_foreign(oauth_env):
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
+        "Authorization": bearer,
     }
 
     # One lifespan: public Host via base_url, foreign Host via header override.
@@ -393,17 +395,13 @@ def test_oauth_mcp_accepts_public_host_rejects_foreign(oauth_env):
         assert "Invalid Host" in bad.text
 
 
-def test_oauth_http_authorize_and_webhook_ack(oauth_env):
+def test_oauth_webhook_ack_and_old_per_user_urls_gone(oauth_env):
     from starlette.testclient import TestClient
 
     from garmin_mcp.oauth.app import build_oauth_app
 
     app = build_oauth_app(server.mcp, oauth_env)
     client = TestClient(app)
-
-    r = client.get("/garmin-oauth/authorize", follow_redirects=False)
-    assert r.status_code == 302
-    assert "connect.garmin.com/oauth2Confirm" in r.headers["location"]
 
     ping = client.post("/garmin-oauth/webhooks/ping", json={"dailies": []})
     assert ping.status_code == 200
@@ -412,10 +410,10 @@ def test_oauth_http_authorize_and_webhook_ack(oauth_env):
 
     push = client.post("/garmin-oauth/webhooks/push", json={"activities": []})
     assert push.status_code == 200
+    app.webhook_worker.wait()
 
-    unknown = client.get("/garmin-oauth/" + ("z" * 40) + "/mcp")
-    assert unknown.status_code == 404
-    assert unknown.json()["error"] == "Unknown connector URL."
+    # Per-user secret URLs were replaced by one bearer-protected endpoint.
+    assert client.get("/garmin-oauth/" + ("z" * 40) + "/mcp").status_code == 404
 
 
 def test_oauth_app_allows_public_host_from_base_url(oauth_env):

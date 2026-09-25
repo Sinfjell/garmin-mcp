@@ -114,9 +114,12 @@ should use `garmin-mcp-auth` instead.
 Set `GARMIN_AUTH_MODE=oauth` and the `GARMIN_OAUTH_*` variables in
 `.env.example` to run a **separate** instance against the Garmin Connect
 Developer Program (OAuth 2.0 PKCE, Health + Activity APIs only). This does not
-replace the default session path. Deploy notes and a smoke checklist:
-[`docs/oauth-deploy.md`](docs/oauth-deploy.md). Training status, lactate
-threshold, and personal records are not available via official APIs.
+replace the default session path. Every user adds the same connector URL
+(`<base>/garmin-oauth/mcp`) to their AI client, which then signs them in: our
+consent page, then Garmin's. Data arrives through Garmin's Ping/Push
+notifications and is stored per user on the host. Deploy notes and a smoke
+checklist: [`docs/oauth-deploy.md`](docs/oauth-deploy.md). Training status,
+lactate threshold, and personal records are not available via official APIs.
 
 ## Remote / hosted mode (use from Claude mobile & web)
 

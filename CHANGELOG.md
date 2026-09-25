@@ -7,6 +7,14 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- OAuth mode is an MCP authorization server (MCP authorization spec: RFC 9728
+  resource metadata, RFC 8414 server metadata, RFC 7591 dynamic client
+  registration, OAuth 2.1 + PKCE). Every user adds the same connector URL,
+  `<base>/garmin-oauth/mcp`; claude.ai and ChatGPT run the sign-in: our consent
+  page with the AI-transparency statement and explicit consent, then Garmin's.
+  Access tokens last 1 h, refresh tokens 90 days and rotate on use; only their
+  SHA-256 hashes are stored. Deregistration revokes the user's tokens. The
+  consent form is bound to the browser that loaded it.
 - OAuth mode ingests Ping/Push notifications, as Garmin's production review
   requires (pull-only integrations are not allowed). The webhook streams the
   body to a spool file, answers 200, and a background worker applies it:
@@ -23,6 +31,9 @@ All notable changes to this project are documented here. Format follows
   secret path segment; Garmin does not sign notifications.
 
 ### Changed
+- **Breaking (oauth mode):** the per-user secret URLs `/garmin-oauth/<user-id>/mcp`
+  and the direct `/garmin-oauth/authorize` → Garmin flow are removed. Reconnect
+  through the shared connector URL; the same Garmin account gets its data back.
 - OAuth-mode tools read from the local summary store instead of pulling the
   wellness API on every call.
 - Consent fails if Garmin's user ID cannot be read after the token exchange,

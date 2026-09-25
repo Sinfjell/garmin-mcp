@@ -22,7 +22,7 @@ someone else's. Any diff touching them needs `review-against-plan` before merge.
    driving the ASGI app over HTTP for two user IDs, not by unit-testing the
    resolver.
 
-3. **User IDs are the whole authentication story.** Possession-of-URL: 32–128
+3. **Session multi-tenant: user IDs are the whole authentication story.** Possession-of-URL: 32–128
    chars of `[a-z0-9-]`, generated with ≥128 bits of entropy. Unknown and
    malformed IDs must return the *same* 404, so probing reveals nothing.
 
@@ -32,7 +32,16 @@ someone else's. Any diff touching them needs `review-against-plan` before merge.
    path: a failing HTTP client can echo the request body back, and the request
    carried the password. Log the exception *type*.
 
-5. **Dependencies carry an upper bound.** No lockfile exists and the production
+5. **OAuth mode: the bearer token names the user, nothing else does.**
+   `/garmin-oauth/mcp` binds the token store of the access token's subject and
+   no other; a missing, unknown, expired or revoked token is a 401 before any
+   store is touched. Garmin webhooks are unsigned, so a notification never
+   destroys data on its own word: deregistration waits for Garmin to reject the
+   user's token, permission changes are re-read from Garmin, and Ping callbacks
+   are only followed on `apis.garmin.com`. Prove isolation over HTTP with two
+   users' tokens.
+
+6. **Dependencies carry an upper bound.** No lockfile exists and the production
    host re-resolves on restart, so an unpinned dependency means any restart can
    pull a breaking major. Lift a ceiling only together with a port to the new
    API — never to make CI green.

@@ -28,6 +28,11 @@ ALLOWED_HOSTS_ENV = "GARMIN_OAUTH_ALLOWED_HOSTS"
 # portal. Garmin does not sign notifications, so this is what keeps strangers
 # from posting fake summaries into a user's store.
 WEBHOOK_SECRET_ENV = "GARMIN_OAUTH_WEBHOOK_SECRET"
+# Shown on the consent page. The privacy link must point at the Garmin section.
+PRIVACY_URL_ENV = "GARMIN_OAUTH_PRIVACY_URL"
+OPERATOR_ENV = "GARMIN_OAUTH_OPERATOR"
+DEFAULT_PRIVACY_URL = "https://productivitytech.io/privacy-policy/#garmin-data"
+DEFAULT_OPERATOR = "Fjellestad AS"
 
 # FastMCP auto-enables DNS rebinding protection when bound to localhost and
 # only allows these Host patterns unless we widen the list for a public proxy.
@@ -73,6 +78,8 @@ class OAuthConfig:
     path_prefix: str
     allowed_hosts: tuple[str, ...]
     webhook_secret: str | None = None
+    privacy_url: str = DEFAULT_PRIVACY_URL
+    operator: str = DEFAULT_OPERATOR
 
     @property
     def wellness_base(self) -> str:
@@ -175,4 +182,6 @@ def load_oauth_config() -> OAuthConfig:
         path_prefix=prefix,
         allowed_hosts=allowed_hosts,
         webhook_secret=webhook_secret,
+        privacy_url=(os.environ.get(PRIVACY_URL_ENV) or "").strip() or DEFAULT_PRIVACY_URL,
+        operator=(os.environ.get(OPERATOR_ENV) or "").strip() or DEFAULT_OPERATOR,
     )

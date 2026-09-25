@@ -20,7 +20,9 @@ authors = [{ name = "Sindre Fjellestad" }]
 dependencies = [
     # Pinned below 2.0: the MCP SDK dropped `mcp.server.fastmcp` in 2.0.0, which
     # this server imports. Lift the ceiling only together with a port to the 2.x API.
-    "mcp[cli]>=1.0,<2",
+    # Floor 1.29: oauth mode builds on the SDK's auth routes and `subject` on
+    # AuthorizationCode/AccessToken, verified against 1.29.0 and 1.30.0.
+    "mcp[cli]>=1.29,<2",
     # Floor is an API requirement, not a preference: get_heart_rate_zones()
     # (get_running_threshold) landed in 0.3.7 — 0.3.3 through 0.3.6 resolve fine
     # and then return an error section at runtime. Verified against each release.
