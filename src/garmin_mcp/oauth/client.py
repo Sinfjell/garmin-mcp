@@ -11,6 +11,7 @@ of inventing data.
 """
 from __future__ import annotations
 
+import contextvars
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlparse
@@ -24,6 +25,31 @@ from garmin_mcp.oauth.flow import refresh_tokens
 from garmin_mcp.oauth.tokens import TokenBundle, TokenStore
 
 _API_HOST = urlparse(API_BASE_URL).hostname
+
+# Garmin device models whose data went into the current tool call. The MCP layer
+# turns them into the "Garmin [device model]" attribution Garmin's API brand
+# guidelines require on every downstream use, including AI. One set per call
+# (context-local), so concurrent requests never mix their attributions.
+_devices_seen: contextvars.ContextVar[set[str] | None] = contextvars.ContextVar("garmin_devices", default=None)
+
+
+def begin_attribution() -> contextvars.Token:
+    return _devices_seen.set(set())
+
+
+def end_attribution(token: contextvars.Token) -> str:
+    """``Garmin <model>[, Garmin <model>]``, or plain ``Garmin`` when no model is known."""
+    devices = _devices_seen.get() or set()
+    _devices_seen.reset(token)
+    return ", ".join(f"Garmin {d}" for d in sorted(devices)) or "Garmin"
+
+
+def _note_device(summary: dict) -> None:
+    seen = _devices_seen.get()
+    nested = summary.get("summary") if isinstance(summary.get("summary"), dict) else {}
+    name = summary.get("deviceName") or nested.get("deviceName")
+    if seen is not None and name:
+        seen.add(str(name).removeprefix("Garmin ").strip())
 _NOT_SYNCED = "No data stored for this date yet. Garmin delivers it after the device syncs."
 
 
@@ -148,6 +174,7 @@ class OfficialGarminClient:
         details = self._data.by_activity_id("activityDetails", activity_id)
         if details is None:
             return {"activityId": activity_id, "detailsAvailable": False}
+        _note_device(details)
         samples = details.get("samples")
         return {
             "activityId": details.get("activityId"),
@@ -253,6 +280,7 @@ def _sum_calories(daily: dict) -> int | None:
 
 def _activity_to_connect_shape(summary: dict) -> dict:
     """Map an official activities summary toward the unofficial Connect shape."""
+    _note_device(summary)
     start = summary.get("startTimeInSeconds")
     offset = summary.get("startTimeOffsetInSeconds") or 0
     start_local = None

@@ -41,7 +41,7 @@ def consent_page(
     error_html = f"<p class='error'>{escape(error)}</p>" if error else ""
     body = f"""
 <h1>Connect your Garmin data to {name}</h1>
-<p>Garmin MCP lets <strong>{name}</strong> read your own Garmin Connect data, so it can answer
+<p>Garmin MCP lets <strong>{name}</strong> read your own Garmin Connect&trade; data, so it can answer
 questions about your training, sleep and recovery. After you continue, Garmin asks you which
 data to share.</p>
 <ul>

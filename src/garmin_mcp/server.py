@@ -20,7 +20,7 @@ from mcp.server.fastmcp import FastMCP
 
 from garmin_mcp import multitenant
 from garmin_mcp.oauth import OfficialApiUnavailableError
-from garmin_mcp.oauth.client import OfficialGarminClient
+from garmin_mcp.oauth.client import OfficialGarminClient, begin_attribution, end_attribution
 from garmin_mcp.oauth.config import AUTH_MODE_OAUTH, is_oauth_mode, load_oauth_config
 from garmin_mcp.oauth.tokens import TokenStore
 
@@ -155,6 +155,8 @@ def _tool_call(build: Callable[[Any], Any]) -> str:
     always get a parseable response.
     """
     try:
+        if is_oauth_mode():
+            return json.dumps(_attributed(build), default=str, separators=(",", ":"))
         data = build(get_client())
         return json.dumps(data, default=str, separators=(",", ":"))
     except OfficialApiUnavailableError as exc:
@@ -163,6 +165,23 @@ def _tool_call(build: Callable[[Any], Any]) -> str:
         return json.dumps({"error": "Garmin authentication expired. Run `garmin-mcp-auth` to log in again."})
     except Exception as exc:  # noqa: BLE001 - always return JSON, never raise to the client
         return json.dumps({"error": f"Garmin request failed: {exc}"})
+
+
+_ATTRIBUTION_NOTE = (
+    "Data from Garmin devices via the Garmin Connect Developer Program. Credit it as the "
+    "'attribution' value wherever you show it, and add 'Insights derived in part from Garmin "
+    "device-sourced data.' to anything you derive from it."
+)
+
+
+def _attributed(build: Callable[[Any], Any]) -> dict:
+    """OAuth mode: wrap a tool result with Garmin's required "Garmin [device model]" attribution."""
+    token = begin_attribution()
+    try:
+        data = build(get_client())
+    finally:
+        attribution = end_attribution(token)
+    return {"data": data, "attribution": attribution, "attribution_note": _ATTRIBUTION_NOTE}
 
 
 def _fmt_activity_summary(a: dict) -> dict:

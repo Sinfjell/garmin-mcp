@@ -335,3 +335,32 @@ def test_disconnect_mid_upload_queues_nothing(oauth_env):
     assert anyio.run(_spool_body, receive, inbox) is None
     assert list(inbox.dir.glob("*.json")) == []
     assert list(inbox.dir.glob("*.partial")) == []
+
+
+def _call_tool(oauth_env, user_id, fn, *args):
+    from garmin_mcp import multitenant
+
+    bound = multitenant._current_token_store.set(str(oauth_env.token_root / user_id))
+    try:
+        return json.loads(fn(*args))
+    finally:
+        multitenant._current_token_store.reset(bound)
+
+
+def test_tool_results_carry_garmin_device_attribution(oauth_env, garmin):
+    """Garmin API brand guidelines: every downstream use names 'Garmin [device model]'."""
+    register(oauth_env, USER_A, "garmin-a")
+    app = build_oauth_app(server.mcp, oauth_env)
+    run = {"userId": "garmin-a", "summaryId": "r1", "activityId": 7, "activityType": "RUNNING",
+           "deviceName": "Forerunner 965", "startTimeInSeconds": 1_758_000_000, "durationInSeconds": 1800}
+    _post(app, {"activities": [run], "dailies": [_daily("garmin-a")]})
+
+    activities = _call_tool(oauth_env, USER_A, server.list_recent_activities, 5)
+    assert activities["attribution"] == "Garmin Forerunner 965"
+    assert activities["data"][0]["id"] == 7
+    assert "Insights derived in part from Garmin device-sourced data" in activities["attribution_note"]
+
+    # No device model in daily summaries: the source is plain "Garmin".
+    daily = _call_tool(oauth_env, USER_A, server.get_daily_stats, "2026-09-20")
+    assert daily["attribution"] == "Garmin"
+    assert daily["data"]["totalSteps"] == 8000

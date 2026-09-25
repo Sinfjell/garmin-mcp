@@ -27,6 +27,10 @@ All notable changes to this project are documented here. Format follows
 - User permission changes re-read permissions from Garmin and purge stored
   data behind a withdrawn permission.
 - The last 30 days are requested through Garmin's backfill after consent.
+- OAuth-mode tool results carry Garmin's required attribution:
+  `{"data": …, "attribution": "Garmin Forerunner 965", "attribution_note": …}`,
+  with the device models behind the data, or plain `Garmin` when none is known
+  (Garmin API brand guidelines: downstream, API and AI use). Session mode is unchanged.
 - `GARMIN_OAUTH_WEBHOOK_SECRET` (required in oauth mode) puts the Ping/Push URLs
   behind a secret path segment; Garmin does not sign notifications. uvicorn's
   access log is off in oauth mode so the secret never reaches the journal.
