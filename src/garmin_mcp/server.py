@@ -1047,8 +1047,15 @@ def _run_oauth(host: str, port: int, path_prefix: str | None) -> None:
 
         prefix = path_prefix if path_prefix.startswith("/") else f"/{path_prefix}"
         config = replace(config, path_prefix="/" + prefix.strip("/"))
-    app = build_oauth_app(mcp, config)
+    app = build_oauth_app(mcp, config, on_user_deleted=lambda uid: _evict_oauth_client(config.token_root / uid))
     uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+def _evict_oauth_client(token_dir: Path) -> None:
+    """Drop a deregistered user's cached client so it cannot outlive their data."""
+    client = _oauth_clients.pop(str(token_dir), None)
+    if client is not None:
+        client.close()
 
 
 def _print_tool_list() -> None:

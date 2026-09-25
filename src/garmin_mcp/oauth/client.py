@@ -1,28 +1,30 @@
 """Official Health/Activity API client with a garminconnect-shaped surface.
 
-Only methods that map to Health/Activity pull endpoints are implemented.
-Anything else raises :class:`OfficialApiUnavailableError` so MCP tools return
-a clear error instead of inventing data.
+Reads come from the user's local summary store (``datastore.py``), filled by
+Ping/Push deliveries — Garmin does not allow pull-only integrations. The
+network methods here serve the webhook processor: following a Ping callback,
+confirming a deregistration, reading current permissions, requesting backfill.
 
-Pull windows filter by **upload** time (device sync), capped at 24h per request.
-For smoke tests we walk recent upload windows and filter summaries by calendar
-date / activity start. Deep history belongs on Ping/Push + backfill (webhook
-stubs accept those deliveries; full ingest is out of scope for this eval path).
+Anything the official APIs do not expose raises
+:class:`OfficialApiUnavailableError`, so MCP tools return a clear error instead
+of inventing data.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
-from garmin_mcp.oauth.config import MAX_PULL_WINDOW_SECONDS, OAuthConfig
-from garmin_mcp.oauth.errors import OfficialApiUnavailableError
+from garmin_mcp.oauth.config import API_BASE_URL, OAuthConfig
+from garmin_mcp.oauth.datastore import SummaryStore
+from garmin_mcp.oauth.errors import GarminApiError, OfficialApiUnavailableError, TokenExchangeError
 from garmin_mcp.oauth.flow import refresh_tokens
 from garmin_mcp.oauth.tokens import TokenBundle, TokenStore
 
-# How far back (by upload time) recent-activity / daily lookups scan.
-_DEFAULT_LOOKBACK_DAYS = 14
+_API_HOST = urlparse(API_BASE_URL).hostname
+_NOT_SYNCED = "No data stored for this date yet. Garmin delivers it after the device syncs."
 
 
 class OfficialGarminClient:
@@ -39,6 +41,7 @@ class OfficialGarminClient:
         self._config = config
         self._store = store
         self._user_id = user_id
+        self._data = SummaryStore(store.user_dir(user_id))
         self._http = http or httpx.Client(timeout=30.0)
         self._owns_http = http is None
         self._bundle: TokenBundle | None = None
@@ -46,6 +49,10 @@ class OfficialGarminClient:
     def close(self) -> None:
         if self._owns_http:
             self._http.close()
+
+    @property
+    def data(self) -> SummaryStore:
+        return self._data
 
     def _tokens(self) -> TokenBundle:
         if self._bundle is None:
@@ -56,9 +63,9 @@ class OfficialGarminClient:
             )
         return self._bundle
 
-    def _request(self, method: str, path: str, *, params: dict[str, Any] | None = None) -> Any:
+    def _request(self, method: str, url: str, *, params: dict[str, Any] | None = None) -> httpx.Response:
+        """Authorized call; one refresh-and-retry on 401. Raises GarminApiError on >= 400."""
         tokens = self._tokens()
-        url = f"{self._config.wellness_base}/{path.lstrip('/')}"
         headers = {"Authorization": f"Bearer {tokens.access_token}"}
         response = self._http.request(method, url, params=params, headers=headers)
         if response.status_code == 401:
@@ -68,88 +75,81 @@ class OfficialGarminClient:
             headers = {"Authorization": f"Bearer {self._bundle.access_token}"}
             response = self._http.request(method, url, params=params, headers=headers)
         if response.status_code >= 400:
-            raise RuntimeError(f"Garmin wellness API HTTP {response.status_code}")
-        if not response.content:
-            return None
-        return response.json()
+            raise GarminApiError(response.status_code)
+        return response
 
-    def _iter_summaries(self, summary_type: str, *, start: datetime, end: datetime) -> list[dict]:
-        results: list[dict] = []
-        window_start = int(start.astimezone(timezone.utc).timestamp())
-        final_end = int(end.astimezone(timezone.utc).timestamp())
-        while window_start < final_end:
-            window_end = min(window_start + MAX_PULL_WINDOW_SECONDS, final_end)
-            payload = self._request(
-                "GET",
-                summary_type,
-                params={
-                    "uploadStartTimeInSeconds": window_start,
-                    "uploadEndTimeInSeconds": window_end,
-                },
-            )
-            if isinstance(payload, list):
-                results.extend(s for s in payload if isinstance(s, dict))
-            window_start = window_end
-        return results
+    def _wellness(self, path: str) -> str:
+        return f"{self._config.wellness_base}/{path.lstrip('/')}"
 
-    def _lookback_window(self, days: int = _DEFAULT_LOOKBACK_DAYS) -> tuple[datetime, datetime]:
-        end = datetime.now(timezone.utc)
-        start = end - timedelta(days=days)
-        return start, end
+    # --- Webhook support ------------------------------------------------
+
+    def fetch_callback(self, callback_url: str) -> list[dict]:
+        """Follow a Ping ``callbackURL``. Only Garmin's API host is ever contacted."""
+        parsed = urlparse(callback_url)
+        if parsed.scheme != "https" or parsed.hostname != _API_HOST:
+            raise ValueError("callbackURL is not on the Garmin API host")
+        response = self._request("GET", callback_url)
+        payload = response.json() if response.content else []
+        return [s for s in payload if isinstance(s, dict)] if isinstance(payload, list) else []
+
+    def registration_active(self) -> bool:
+        """True while Garmin still honours this user's tokens.
+
+        A deregistration notification is only acted on once Garmin itself
+        rejects the user's tokens, so a forged notification cannot delete data.
+        Network and 5xx failures propagate: they prove nothing either way.
+        """
+        try:
+            self._request("GET", self._wellness("user/id"))
+        except TokenExchangeError:
+            return False
+        except GarminApiError as exc:
+            if exc.status_code in (401, 403):
+                return False
+            raise
+        return True
+
+    def current_permissions(self) -> list[str]:
+        """The user's permissions as Garmin reports them now (not as a webhook claims)."""
+        payload = self._request("GET", self._wellness("user/permissions")).json()
+        if isinstance(payload, dict):
+            payload = payload.get("permissions", [])
+        return [str(p) for p in payload] if isinstance(payload, list) else []
+
+    def request_backfill(self, summary_type: str, start_ts: int, end_ts: int) -> None:
+        """Ask Garmin to redeliver history for one type; data arrives via Ping/Push."""
+        self._request(
+            "GET",
+            self._wellness(f"backfill/{summary_type}"),
+            params={"summaryStartTimeInSeconds": start_ts, "summaryEndTimeInSeconds": end_ts},
+        )
 
     # --- Activity tools -------------------------------------------------
 
     def get_activities(self, start: int, limit: int) -> list[dict]:
-        window_start, window_end = self._lookback_window()
-        summaries = self._iter_summaries("activities", start=window_start, end=window_end)
-        summaries = _dedupe_by_id(summaries, "activityId")
-        summaries.sort(key=lambda s: s.get("startTimeInSeconds") or 0, reverse=True)
-        sliced = summaries[start : start + limit]
-        return [_activity_to_connect_shape(s) for s in sliced]
+        return [_activity_to_connect_shape(s) for s in self._data.latest("activities", offset=start, limit=limit)]
 
     def get_activities_by_date(self, start_date: str, end_date: str) -> list[dict]:
-        # Pull a padded upload window around the calendar range, then filter.
-        start_dt = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc) - timedelta(days=2)
-        end_dt = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc) + timedelta(days=3)
-        now = datetime.now(timezone.utc)
-        end_dt = min(end_dt, now)
-        if start_dt > end_dt:
-            start_dt = end_dt - timedelta(days=1)
-        summaries = self._iter_summaries("activities", start=start_dt, end=end_dt)
-        summaries = _dedupe_by_id(summaries, "activityId")
-        out = []
-        for s in summaries:
-            local = _activity_local_date(s)
-            if local and start_date <= local <= end_date:
-                out.append(_activity_to_connect_shape(s))
-        out.sort(key=lambda a: a.get("startTimeLocal") or "", reverse=True)
-        return out
+        rows = self._data.by_date_range("activities", start_date, end_date)
+        return [_activity_to_connect_shape(s) for s in rows]
 
     def get_activity(self, activity_id: str) -> dict:
-        for a in self.get_activities(0, 100):
-            if str(a.get("activityId")) == str(activity_id):
-                return a
-        # Narrower targeted pull via activityDetails if list miss.
-        window_start, window_end = self._lookback_window(days=30)
-        details = self._iter_summaries("activityDetails", start=window_start, end=window_end)
-        for d in details:
-            if str(d.get("activityId")) == str(activity_id):
-                return _activity_to_connect_shape(d)
-        raise RuntimeError(f"Activity {activity_id} not found in recent official API uploads")
+        summary = self._data.by_activity_id("activities", activity_id)
+        if summary is None:
+            raise RuntimeError(f"Activity {activity_id} has not been delivered by Garmin yet")
+        return _activity_to_connect_shape(summary)
 
     def get_activity_details(self, activity_id: str) -> dict:
-        window_start, window_end = self._lookback_window(days=30)
-        details = self._iter_summaries("activityDetails", start=window_start, end=window_end)
-        for d in details:
-            if str(d.get("activityId")) == str(activity_id):
-                # Strip bulky samples; keep a compact details object.
-                return {
-                    "activityId": d.get("activityId"),
-                    "summaryId": d.get("summaryId"),
-                    "detailsAvailable": True,
-                    "measurementCount": len(d.get("samples") or []) if isinstance(d.get("samples"), list) else None,
-                }
-        return {"activityId": activity_id, "detailsAvailable": False}
+        details = self._data.by_activity_id("activityDetails", activity_id)
+        if details is None:
+            return {"activityId": activity_id, "detailsAvailable": False}
+        samples = details.get("samples")
+        return {
+            "activityId": details.get("activityId"),
+            "summaryId": details.get("summaryId"),
+            "detailsAvailable": True,
+            "measurementCount": len(samples) if isinstance(samples, list) else None,
+        }
 
     def get_activity_splits(self, activity_id: str) -> dict:
         raise OfficialApiUnavailableError("activity lap / split structure")
@@ -162,7 +162,7 @@ class OfficialGarminClient:
     def get_stats(self, date: str) -> dict:
         daily = self._daily_for_date(date)
         if daily is None:
-            return {"calendarDate": date, "note": "No dailies summary in recent upload window"}
+            return {"calendarDate": date, "note": _NOT_SYNCED}
         return {
             "calendarDate": date,
             "totalSteps": daily.get("steps"),
@@ -177,15 +177,10 @@ class OfficialGarminClient:
         }
 
     def get_sleep_data(self, date: str) -> dict:
-        start, end = self._lookback_window()
-        sleeps = self._iter_summaries("sleeps", start=start, end=end)
-        match = None
-        for s in sleeps:
-            if _summary_calendar_date(s) == date:
-                match = s
-                break
-        if match is None:
-            return {"dailySleepDTO": {"calendarDate": date}, "note": "No sleep summary in recent upload window"}
+        sleeps = self._data.by_date("sleeps", date)
+        if not sleeps:
+            return {"dailySleepDTO": {"calendarDate": date}, "note": _NOT_SYNCED}
+        match = sleeps[0]
         return {
             "dailySleepDTO": {
                 "calendarDate": date,
@@ -202,7 +197,7 @@ class OfficialGarminClient:
     def get_heart_rates(self, date: str) -> dict:
         daily = self._daily_for_date(date)
         if daily is None:
-            return {"calendarDate": date, "note": "No dailies summary in recent upload window"}
+            return {"calendarDate": date, "note": _NOT_SYNCED}
         return {
             "calendarDate": date,
             "minHeartRate": daily.get("minHeartRateInBeatsPerMinute"),
@@ -213,12 +208,11 @@ class OfficialGarminClient:
         }
 
     def _daily_for_date(self, date: str) -> dict | None:
-        start, end = self._lookback_window()
-        dailies = self._iter_summaries("dailies", start=start, end=end)
-        for d in dailies:
-            if _summary_calendar_date(d) == date:
-                return d
-        return None
+        # Garmin re-sends a day's summary as it fills up; the fullest one wins.
+        dailies = self._data.by_date("dailies", date)
+        if not dailies:
+            return None
+        return max(dailies, key=lambda d: d.get("durationInSeconds") or 0)
 
     # --- Explicitly unavailable -----------------------------------------
 
@@ -250,37 +244,6 @@ def _sum_calories(daily: dict) -> int | None:
     if isinstance(active, (int, float)) or isinstance(bmr, (int, float)):
         return int((active or 0) + (bmr or 0))
     return None
-
-
-def _dedupe_by_id(summaries: list[dict], key: str) -> list[dict]:
-    seen: set[str] = set()
-    out: list[dict] = []
-    for s in summaries:
-        sid = s.get(key) or s.get("summaryId")
-        if sid is None:
-            out.append(s)
-            continue
-        sid_s = str(sid)
-        if sid_s in seen:
-            continue
-        seen.add(sid_s)
-        out.append(s)
-    return out
-
-
-def _summary_calendar_date(summary: dict) -> str | None:
-    if summary.get("calendarDate"):
-        return str(summary["calendarDate"])[:10]
-    start = summary.get("startTimeInSeconds")
-    offset = summary.get("startTimeOffsetInSeconds") or 0
-    if isinstance(start, (int, float)):
-        local = datetime.fromtimestamp(start + offset, tz=timezone.utc)
-        return local.date().isoformat()
-    return None
-
-
-def _activity_local_date(summary: dict) -> str | None:
-    return _summary_calendar_date(summary)
 
 
 def _activity_to_connect_shape(summary: dict) -> dict:

@@ -34,3 +34,11 @@ class OfficialApiUnavailableError(Exception):
             "in oauth mode; use GARMIN_AUTH_MODE=session for unofficial "
             "Connect session data, or omit the claim."
         )
+
+
+class GarminApiError(Exception):
+    """Wellness API returned a non-success status (body deliberately not kept)."""
+
+    def __init__(self, status_code: int):
+        super().__init__(f"Garmin wellness API HTTP {status_code}")
+        self.status_code = status_code

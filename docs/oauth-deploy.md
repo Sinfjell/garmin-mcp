@@ -131,16 +131,40 @@ and restart with `uvx --refresh`.
 
 ## Portal URLs to register
 
-On the evaluation app «Garmin MCP»:
+On the evaluation app «Garmin MCP». With `GARMIN_OAUTH_WEBHOOK_SECRET` set
+(recommended — Garmin does not sign notifications), the webhook URLs carry the
+secret as a path segment:
 
 | Purpose | URL |
 |---|---|
 | OAuth redirect | `https://mcp.productivitytech.io/garmin-oauth/callback` |
-| Ping webhook | `https://mcp.productivitytech.io/garmin-oauth/webhooks/ping` |
-| Push webhook | `https://mcp.productivitytech.io/garmin-oauth/webhooks/push` |
+| Ping webhook | `https://mcp.productivitytech.io/garmin-oauth/webhooks/<secret>/ping` |
+| Push webhook | `https://mcp.productivitytech.io/garmin-oauth/webhooks/<secret>/push` |
 
-Ping/Push handlers currently **acknowledge with HTTP 200** and do not ingest
-payloads (documented stubs for the eval program). Pull is used for smoke tests.
+Enable **Deregistration** and **User Permission** notifications and point them
+at the Ping URL. Summary types may use either Ping or Push; the handler is the
+same. Do not paste the secret into chat or tickets.
+
+## How notifications are processed
+
+1. The handler streams the body (≤ 128 MB) to `$TOKEN_ROOT/.inbox/*.json` and
+   answers **200** before doing anything else.
+2. One worker thread applies spool files in arrival order. On start, files left
+   from before a restart are processed; half-written `.partial` files are dropped.
+3. Summaries are upserted per user into `$TOKEN_ROOT/<user-id>/summaries.sqlite3`
+   (0600). Ping callbacks are fetched with that user's bearer token, and only
+   from `apis.garmin.com`.
+4. **Deregistration**: the user's directory (tokens + data) and Garmin-ID index
+   entry are deleted — only after Garmin rejects the user's token on
+   `GET /user/id`. A 200 there means the notification is ignored.
+5. **Permission change**: permissions are re-read from Garmin; data behind a
+   withdrawn `ACTIVITY_EXPORT` / `HEALTH_EXPORT` is purged.
+6. A file with any failed item moves to `.inbox/failed/`. All writes are
+   idempotent, so replaying one (move it back to `.inbox/`, restart) is safe.
+
+After consent the server requests 30 days of backfill for activities, dailies,
+sleeps, stressDetails, hrv and userMetrics; the data then arrives as ordinary
+Ping/Push notifications. Tools answer from the local store only.
 
 ## Endpoints this process serves
 
@@ -148,8 +172,8 @@ payloads (documented stubs for the eval program). Pull is used for smoke tests.
 |---|---|---|
 | GET | `/garmin-oauth/authorize` | Start PKCE; redirect to Garmin consent |
 | GET | `/garmin-oauth/callback` | Exchange code; create tenant token store; show MCP URL |
-| POST | `/garmin-oauth/webhooks/ping` | Stub 200 |
-| POST | `/garmin-oauth/webhooks/push` | Stub 200 |
+| POST | `/garmin-oauth/webhooks[/<secret>]/ping` | Spool, 200, process in background |
+| POST | `/garmin-oauth/webhooks[/<secret>]/push` | Same handler |
 | * | `/garmin-oauth/<user-id>/mcp` | Streamable MCP for that user only |
 
 ## Smoke checklist (human)
@@ -159,6 +183,10 @@ payloads (documented stubs for the eval program). Pull is used for smoke tests.
 3. Start the **new** unit on port 8770; confirm existing units unchanged.
 4. Open `https://mcp.productivitytech.io/garmin-oauth/authorize`, complete consent.
 5. Copy the printed MCP URL (`.../garmin-oauth/<user-id>/mcp`).
-6. `initialize` against that URL; call `get_daily_stats` and `list_recent_activities`.
-7. Confirm `get_training_status` / `get_personal_records` / `get_performance_metrics`
-   return a clear «not available via official API» error (no fake numbers).
+6. Within a few minutes, `ls $TOKEN_ROOT/<user-id>/` shows `summaries.sqlite3`
+   (backfill arriving) and `.inbox/` is empty; `.inbox/failed/` must stay empty.
+7. `initialize` against that URL; call `get_daily_stats` and `list_recent_activities`.
+8. In Garmin's Data Generator, send a Push and a Ping for the test user; repeat 7.
+9. Run Partner Verification; it checks deregistration, permissions and the 200s.
+10. Confirm `get_training_status` / `get_personal_records` / `get_performance_metrics`
+    return a clear «not available via official API» error (no fake numbers).

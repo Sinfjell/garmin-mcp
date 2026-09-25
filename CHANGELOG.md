@@ -6,7 +6,27 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- OAuth mode ingests Ping/Push notifications, as Garmin's production review
+  requires (pull-only integrations are not allowed). The webhook streams the
+  body to a spool file, answers 200, and a background worker applies it:
+  summaries are stored per user in `<token-root>/<user-id>/summaries.sqlite3`,
+  Ping callbacks are followed only on `apis.garmin.com`, and deliveries
+  acknowledged before a restart are processed on start. Bodies up to 128 MB.
+- Deregistration deletes the user's tokens and stored data, but only once
+  Garmin itself rejects the user's tokens, so a forged notification cannot
+  delete anyone.
+- User permission changes re-read permissions from Garmin and purge stored
+  data behind a withdrawn permission.
+- The last 30 days are requested through Garmin's backfill after consent.
+- Optional `GARMIN_OAUTH_WEBHOOK_SECRET` puts the Ping/Push URLs behind a
+  secret path segment; Garmin does not sign notifications.
+
 ### Changed
+- OAuth-mode tools read from the local summary store instead of pulling the
+  wellness API on every call.
+- Consent fails if Garmin's user ID cannot be read after the token exchange,
+  instead of creating a tenant that could never receive data.
 - Docs and `.env.example` point hosted endpoints at `mcp.productivitytech.io`;
   productivitytech.io itself moves to Vercel and no longer serves MCP routes.
 

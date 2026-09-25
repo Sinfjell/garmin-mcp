@@ -7,16 +7,27 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
 from mcp.server.transport_security import TransportSecuritySettings
 
 from garmin_mcp import multitenant
+from garmin_mcp.oauth.client import OfficialGarminClient
 from garmin_mcp.oauth.config import OAuthConfig, resolve_allowed_origins
-from garmin_mcp.oauth.errors import OAuthError, StateMismatchError, TokenExchangeError
+from garmin_mcp.oauth.errors import StateMismatchError
 from garmin_mcp.oauth.flow import build_authorization_url, exchange_code
 from garmin_mcp.oauth.tokens import TokenStore
+from garmin_mcp.oauth.webhooks import (
+    MAX_BODY_BYTES,
+    NotificationProcessor,
+    WebhookInbox,
+    WebhookWorker,
+    request_initial_backfill,
+)
 
 log = logging.getLogger(__name__)
 
@@ -73,23 +84,101 @@ def _html_response(send: Any, status: int, html: str) -> Any:
 
 def _success_html(mcp_url: str) -> str:
     return (
-        "<!doctype html><html><head><meta charset='utf-8'><title>Garmin OAuth</title></head>"
+        "<!doctype html><html><head><meta charset='utf-8'><title>Garmin connected</title></head>"
         "<body><h1>Connected</h1>"
-        "<p>OAuth completed. Your personal MCP connector URL (treat as a credential):</p>"
+        "<p>Your personal MCP connector URL (treat it as a password):</p>"
         f"<p><code>{mcp_url}</code></p>"
-        "<p>Privacy Policy outlining Garmin data use and third-party AI must be published "
-        "separately before production (external gap — not part of this server).</p>"
+        "<p>Garmin delivers your recent history over the next minutes, and new data "
+        "each time your device syncs.</p>"
         "</body></html>"
     )
 
 
+def _webhook_paths(config: OAuthConfig) -> tuple[str, ...]:
+    """Ping and Push URLs; behind a secret segment when one is configured."""
+    base = f"{config.path_prefix}/webhooks"
+    if config.webhook_secret:
+        base = f"{base}/{config.webhook_secret}"
+    return (f"{base}/ping", f"{base}/push")
 
 
-def build_oauth_app(mcp: Any, config: OAuthConfig) -> Any:
-    """ASGI app: authorize, callback, ping/push stubs, and per-user MCP."""
+async def _spool_body(receive: Any, inbox: WebhookInbox) -> Path | None:
+    """Stream the request body to a spool file. None when it exceeds the cap."""
+    partial = inbox.new_partial()
+    total = 0
+    with partial.open("wb") as fh:
+        os.chmod(partial, 0o600)
+        while True:
+            message = await receive()
+            if message["type"] != "http.request":
+                break
+            chunk = message.get("body", b"")
+            total += len(chunk)
+            if total > MAX_BODY_BYTES:
+                fh.close()
+                partial.unlink(missing_ok=True)
+                return None
+            fh.write(chunk)
+            if not message.get("more_body"):
+                break
+    return inbox.commit(partial)
+
+
+async def _handle_webhook(receive: Any, send: Any, worker: WebhookWorker) -> None:
+    path = await _spool_body(receive, worker.inbox)
+    if path is None:
+        await _json_response(send, 413, {"error": "Payload too large."})
+        return
+    # Acknowledge first; Garmin wants 200 within 30 s and processing afterwards.
+    await _json_response(send, 200, {"status": "accepted"})
+    worker.submit(path)
+
+
+async def _handle_callback(scope: dict, send: Any, config: OAuthConfig, store: TokenStore,
+                           worker: WebhookWorker) -> None:
+    qs = parse_qs(scope.get("query_string", b"").decode())
+    code = (qs.get("code") or [None])[0]
+    state = (qs.get("state") or [None])[0]
+    if not code or not state:
+        await _html_response(send, 400, "<h1>Missing code or state</h1>")
+        return
+    try:
+        user_id, bundle = exchange_code(config, store, code=code, state=state)
+    except StateMismatchError:
+        await _html_response(send, 400, "<h1>Invalid or expired OAuth state</h1>")
+        return
+    except Exception as exc:  # noqa: BLE001 - log the type only, never the message
+        log.error("oauth callback failed: %s", type(exc).__name__)
+        await _html_response(send, 502, "<h1>Connecting to Garmin failed</h1>")
+        return
+
+    def backfill() -> None:
+        client = OfficialGarminClient(config, store, user_id)
+        try:
+            request_initial_backfill(client, bundle.permissions)
+        finally:
+            client.close()
+
+    worker.submit_task(backfill)
+    await _html_response(send, 200, _success_html(f"{config.public_base_url}{config.path_prefix}/{user_id}/mcp"))
+
+
+def build_oauth_app(
+    mcp: Any,
+    config: OAuthConfig,
+    *,
+    on_user_deleted: Callable[[str], None] | None = None,
+) -> Any:
+    """ASGI app: authorize, callback, Ping/Push intake, and per-user MCP."""
     store = TokenStore(config.token_root)
     store.ensure_root()
     prefix = config.path_prefix
+    worker = WebhookWorker(
+        WebhookInbox(config.token_root),
+        NotificationProcessor(config, store, on_user_deleted=on_user_deleted),
+    )
+    worker.drain_on_start()
+    webhook_paths = _webhook_paths(config)
 
     multitenant.activate_multi_tenant()
     mcp.settings.stateless_http = True
@@ -101,101 +190,53 @@ def build_oauth_app(mcp: Any, config: OAuthConfig) -> Any:
         if scope["type"] != "http":
             await inner_app(scope, receive, send)
             return
-
         path: str = scope.get("path", "")
         method: str = scope.get("method", "GET").upper()
 
-        # --- OAuth authorize -------------------------------------------
         if path == f"{prefix}/authorize" and method == "GET":
-            try:
-                url, _pair = build_authorization_url(config, store)
-            except Exception as exc:  # noqa: BLE001 - log type only, never the message
-                log.error("authorize failed: %s", type(exc).__name__)
-                await _html_response(send, 500, "<h1>Authorize failed</h1>")
-                return
-            await send({
-                "type": "http.response.start",
-                "status": 302,
-                "headers": [(b"location", url.encode())],
-            })
-            await send({"type": "http.response.body", "body": b""})
-            return
+            await _handle_authorize(send, config, store)
+        elif path == f"{prefix}/callback" and method == "GET":
+            await _handle_callback(scope, send, config, store, worker)
+        elif path in webhook_paths and method == "POST":
+            await _handle_webhook(receive, send, worker)
+        else:
+            await _route_mcp(scope, receive, send, inner_app, store, prefix)
 
-        # --- OAuth callback --------------------------------------------
-        if path == f"{prefix}/callback" and method == "GET":
-            qs = parse_qs(scope.get("query_string", b"").decode())
-            code = (qs.get("code") or [None])[0]
-            state = (qs.get("state") or [None])[0]
-            if not code or not state:
-                await _html_response(send, 400, "<h1>Missing code or state</h1>")
-                return
-            try:
-                user_id, _bundle = exchange_code(config, store, code=code, state=state)
-            except StateMismatchError:
-                await _html_response(send, 400, "<h1>Invalid or expired OAuth state</h1>")
-                return
-            except TokenExchangeError as exc:
-                log.error("token exchange failed: %s", type(exc).__name__)
-                await _html_response(send, 502, "<h1>Token exchange failed</h1>")
-                return
-            except OAuthError as exc:
-                log.error("oauth callback failed: %s", type(exc).__name__)
-                await _html_response(send, 502, "<h1>OAuth failed</h1>")
-                return
-            except Exception as exc:  # noqa: BLE001 - log type only
-                log.error("oauth callback failed: %s", type(exc).__name__)
-                await _html_response(send, 500, "<h1>OAuth failed</h1>")
-                return
-            mcp_url = f"{config.public_base_url}{prefix}/{user_id}/mcp"
-            await _html_response(send, 200, _success_html(mcp_url))
-            return
-
-        # --- Ping / Push webhook stubs (eval program requirement) ------
-        if path in (f"{prefix}/webhooks/ping", f"{prefix}/webhooks/push") and method == "POST":
-            # Read and discard body; return 200 quickly so Garmin does not disable the endpoint.
-            while True:
-                message = await receive()
-                if message["type"] != "http.request":
-                    break
-                if not message.get("more_body"):
-                    break
-            log.info("webhook stub accepted path=%s", path)
-            await _json_response(
-                send,
-                200,
-                {
-                    "status": "accepted",
-                    "note": (
-                        "Stub: Ping/Push payloads are acknowledged but not ingested yet. "
-                        "Configure these URLs in the Garmin developer portal for the eval app."
-                    ),
-                },
-            )
-            return
-
-        # --- Per-user MCP ----------------------------------------------
-        user_id, token_dir = None, None
-        if path.startswith(prefix + "/"):
-            rest = path[len(prefix) + 1 :]
-            head, _, tail = rest.partition("/")
-            if "/" + tail == "/mcp":
-                user_id = head
-                token_dir = store.resolve_existing(user_id) if user_id else None
-
-        if user_id is not None:
-            if token_dir is None:
-                await _json_response(send, 404, {"error": "Unknown connector URL."})
-                return
-            inner_scope = dict(scope)
-            inner_scope["path"] = "/mcp"
-            inner_scope["raw_path"] = b"/mcp"
-            token = multitenant._current_token_store.set(str(token_dir))
-            try:
-                await inner_app(inner_scope, receive, send)
-            finally:
-                multitenant._current_token_store.reset(token)
-            return
-
-        await _json_response(send, 404, {"error": "Not found."})
-
+    app.webhook_worker = worker  # type: ignore[attr-defined]  # tests wait on it
     return app
+
+
+async def _handle_authorize(send: Any, config: OAuthConfig, store: TokenStore) -> None:
+    try:
+        url, _pair = build_authorization_url(config, store)
+    except Exception as exc:  # noqa: BLE001 - log type only, never the message
+        log.error("authorize failed: %s", type(exc).__name__)
+        await _html_response(send, 500, "<h1>Authorize failed</h1>")
+        return
+    await send({"type": "http.response.start", "status": 302, "headers": [(b"location", url.encode())]})
+    await send({"type": "http.response.body", "body": b""})
+
+
+async def _route_mcp(scope: dict, receive: Any, send: Any, inner_app: Any, store: TokenStore, prefix: str) -> None:
+    """Serve ``<prefix>/<user-id>/mcp`` from that user's token store only."""
+    path: str = scope.get("path", "")
+    user_id, token_dir = None, None
+    if path.startswith(prefix + "/"):
+        head, _, tail = path[len(prefix) + 1 :].partition("/")
+        if "/" + tail == "/mcp":
+            user_id = head
+            token_dir = store.resolve_existing(user_id) if user_id else None
+    if user_id is None:
+        await _json_response(send, 404, {"error": "Not found."})
+        return
+    if token_dir is None:
+        await _json_response(send, 404, {"error": "Unknown connector URL."})
+        return
+    inner_scope = dict(scope)
+    inner_scope["path"] = "/mcp"
+    inner_scope["raw_path"] = b"/mcp"
+    token = multitenant._current_token_store.set(str(token_dir))
+    try:
+        await inner_app(inner_scope, receive, send)
+    finally:
+        multitenant._current_token_store.reset(token)
