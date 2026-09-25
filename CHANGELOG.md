@@ -34,8 +34,9 @@ All notable changes to this project are documented here. Format follows
 - `GARMIN_OAUTH_WEBHOOK_SECRET` (required in oauth mode) puts the Ping/Push URLs
   behind a secret path segment; Garmin does not sign notifications. uvicorn's
   access log is off in oauth mode so the secret never reaches the journal.
-- Failed webhook items are retried after 1 min, 10 min and 1 h, then parked for
-  at most 7 days. Deregistration removes the user from spooled files too.
+- Failed webhook items are retried after 1 min, 10 min and 1 h; summaries are
+  then parked for at most 7 days, while deregistrations and permission changes
+  keep retrying hourly until applied. Deregistration removes the user from spooled files too.
 
 ### Changed
 - **Breaking (oauth mode):** the per-user secret URLs `/garmin-oauth/<user-id>/mcp`

@@ -177,7 +177,9 @@ same. Do not paste the secret into chat or tickets.
    withdrawn `ACTIVITY_EXPORT` / `HEALTH_EXPORT` is purged.
 6. Items that fail (Garmin 5xx, timeouts) are written to `.inbox/retry/` and
    retried after 1 min, 10 min and 1 h — also across a restart. After the last
-   retry they are parked in `.inbox/failed/` and deleted after 7 days. All writes
+   retry, summaries are parked in `.inbox/failed/` and deleted after 7 days.
+   Deregistrations and permission changes are never parked: they retry hourly
+   until Garmin answers, so a deletion Garmin asked for always happens. All writes
    are idempotent, so replaying a parked file (move it to `.inbox/`, restart) is safe.
 7. Deregistration also removes the user's items from every spooled file.
 

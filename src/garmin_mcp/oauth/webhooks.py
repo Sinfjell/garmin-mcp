@@ -61,6 +61,8 @@ ClientFactory = Callable[[str], OfficialGarminClient]
 
 # Items that fail (Garmin 5xx, a timeout) are retried after these delays, then parked.
 RETRY_DELAYS_SECONDS = (60, 10 * 60, 60 * 60)
+# Items that must eventually be applied, however long Garmin is unavailable.
+_NEVER_PARK = frozenset({"deregistrations", "userPermissionsChange"})
 # Parked files hold raw health data for several users; they are not kept for long.
 FAILED_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
@@ -275,7 +277,6 @@ class WebhookWorker:
         self.inbox = inbox
         self.processor = processor
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="garmin-webhooks")
-        self._timers: list[threading.Timer] = []
 
     def submit(self, path: Path) -> None:
         self._pool.submit(_log_failures, functools.partial(self._run_file, path))
@@ -294,15 +295,28 @@ class WebhookWorker:
             self._retry_later(failed, attempt)
 
     def _retry_later(self, failed: dict[str, list], attempt: int) -> None:
-        if attempt >= len(RETRY_DELAYS_SECONDS):
-            self.inbox.write(self.inbox.failed_dir, failed, "failed")
+        """Retry failed items; park summaries after the last retry.
+
+        Deregistrations and permission changes are never parked: parking would
+        eventually expire them unapplied and leave data Garmin told us to
+        delete. They keep retrying at the longest interval until Garmin answers.
+        """
+        last = len(RETRY_DELAYS_SECONDS)
+        must_apply = {k: v for k, v in failed.items() if k in _NEVER_PARK}
+        rest = {k: v for k, v in failed.items() if k not in _NEVER_PARK}
+        if must_apply:
+            self._schedule(must_apply, min(attempt + 1, last))
+        if rest and attempt >= last:
+            self.inbox.write(self.inbox.failed_dir, rest, "failed")
             self.inbox.expire_failed()
-            return
-        retry = self.inbox.write(self.inbox.retry_dir, failed, str(attempt + 1))
-        timer = threading.Timer(RETRY_DELAYS_SECONDS[attempt], self.submit, args=(retry,))
+        elif rest:
+            self._schedule(rest, attempt + 1)
+
+    def _schedule(self, payload: dict[str, list], attempt: int) -> None:
+        retry = self.inbox.write(self.inbox.retry_dir, payload, str(attempt))
+        timer = threading.Timer(RETRY_DELAYS_SECONDS[attempt - 1], self.submit, args=(retry,))
         timer.daemon = True
         timer.start()
-        self._timers.append(timer)
 
     def drain_on_start(self) -> None:
         """Re-queue deliveries and retries left from before the last shutdown."""

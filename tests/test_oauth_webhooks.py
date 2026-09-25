@@ -364,3 +364,29 @@ def test_tool_results_carry_garmin_device_attribution(oauth_env, garmin):
     daily = _call_tool(oauth_env, USER_A, server.get_daily_stats, "2026-09-20")
     assert daily["attribution"] == "Garmin"
     assert daily["data"]["totalSteps"] == 8000
+
+
+def test_deregistration_is_never_parked(oauth_env, garmin):
+    """Past the last retry a deregistration stays queued: it must be applied eventually."""
+    store = register(oauth_env, USER_A, "garmin-a")
+    garmin.user_id_status = 503  # Garmin down for longer than every retry interval
+    app = build_oauth_app(server.mcp, oauth_env)
+    inbox = app.webhook_worker.inbox
+    last = len(webhooks.RETRY_DELAYS_SECONDS)
+    payload = {"deregistrations": [{"userId": "garmin-a"}], "dailies": [{"userId": "garmin-a",
+                                                                          "callbackURL": "https://evil.example/"}]}
+    path = inbox.write(inbox.retry_dir, payload, str(last))
+    app.webhook_worker.submit(path)
+    app.webhook_worker.wait()
+
+    queued = [json.loads(p.read_text()) for p in inbox.retry_dir.glob(f"{last}-*.json")]
+    parked = [json.loads(p.read_text()) for p in inbox.failed_dir.glob("*.json")]
+    assert queued == [{"deregistrations": [{"userId": "garmin-a"}]}]
+    assert [list(p) for p in parked] == [["dailies"]]
+    assert store.resolve_existing(USER_A) is not None
+
+    garmin.user_id_status = 401  # Garmin is back and refuses the token
+    [retry] = inbox.retry_dir.glob(f"{last}-*.json")
+    app.webhook_worker.submit(retry)
+    app.webhook_worker.wait()
+    assert store.resolve_existing(USER_A) is None
