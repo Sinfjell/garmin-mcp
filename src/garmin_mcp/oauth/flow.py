@@ -12,6 +12,7 @@ from garmin_mcp.oauth.config import (
     OAUTH_TOKEN_URL,
     OAuthConfig,
 )
+from garmin_mcp.oauth.datastore import SummaryStore, withdrawn_types
 from garmin_mcp.oauth.errors import OAuthError, StateMismatchError, TokenExchangeError
 from garmin_mcp.oauth.pkce import PkcePair, new_pkce_pair
 from garmin_mcp.oauth.tokens import PendingAuth, TokenBundle, TokenStore, new_user_id
@@ -136,6 +137,8 @@ def exchange_code(
     )
     bundle.connected_at = time.time()
     store.save_tokens(user_id, bundle)
+    # A reconnect may share less than before: drop what is no longer shared.
+    SummaryStore(store.user_dir(user_id)).purge(withdrawn_types(permissions))
     return user_id, bundle
 
 

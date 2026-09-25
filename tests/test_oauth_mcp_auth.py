@@ -321,3 +321,20 @@ def test_refresh_that_repeats_the_scope_keeps_working(app):
         })
         assert refreshed.status_code == 200, refreshed.text
         assert refreshed.json()["scope"] == "garmin"
+
+
+def test_reconnecting_with_less_sharing_drops_the_unshared_data(app, oauth_env, garmin):
+    garmin.garmin_user_id = "garmin-same"
+    with TestClient(app, base_url=BASE) as http:
+        _connect(http)
+        [user_dir] = [p for p in oauth_env.token_root.iterdir() if not p.name.startswith(".")]
+        data = SummaryStore(user_dir)
+        data.put("sleeps", [{"summaryId": "s", "calendarDate": "2026-09-20"}])
+        data.put("activities", [{"summaryId": "a", "activityId": 1, "startTimeInSeconds": 1}])
+
+        garmin.permissions = ["ACTIVITY_EXPORT"]  # health sharing unticked this time
+        _connect(http)
+
+    assert [p for p in oauth_env.token_root.iterdir() if not p.name.startswith(".")] == [user_dir]
+    assert data.by_date("sleeps", "2026-09-20") == []
+    assert data.by_activity_id("activities", "1") is not None

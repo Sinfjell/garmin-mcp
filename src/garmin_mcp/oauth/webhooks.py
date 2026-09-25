@@ -32,14 +32,7 @@ from typing import Any
 
 from garmin_mcp.oauth.client import OfficialGarminClient
 from garmin_mcp.oauth.config import OAuthConfig
-from garmin_mcp.oauth.datastore import (
-    ACTIVITY_PERMISSION,
-    ACTIVITY_TYPES,
-    HEALTH_PERMISSION,
-    HEALTH_TYPES,
-    SUMMARY_TYPES,
-    permission_for,
-)
+from garmin_mcp.oauth.datastore import SUMMARY_TYPES, permission_for, withdrawn_types
 from garmin_mcp.oauth.tokens import TokenStore
 
 log = logging.getLogger(__name__)
@@ -249,12 +242,7 @@ class NotificationProcessor:
             bundle = self._tokens.load_tokens(user_id)
             bundle.permissions = permissions
             self._tokens.save_tokens(user_id, bundle)
-            withdrawn: set[str] = set()
-            if ACTIVITY_PERMISSION not in permissions:
-                withdrawn |= ACTIVITY_TYPES
-            if HEALTH_PERMISSION not in permissions:
-                withdrawn |= HEALTH_TYPES
-            client.data.purge(withdrawn)
+            client.data.purge(withdrawn_types(permissions))
 
         self._with_client(user_id, apply)
 

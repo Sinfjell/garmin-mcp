@@ -46,6 +46,7 @@ All notable changes to this project are documented here. Format follows
   through the shared connector URL; the same Garmin account gets its data back.
 - OAuth-mode tools read from the local summary store instead of pulling the
   wellness API on every call.
+- Reconnecting with fewer permissions deletes the data no longer shared.
 - Consent fails if Garmin's user ID or permissions cannot be read after the
   token exchange, instead of creating a tenant that could never receive data
   or whose permissions are unknown.

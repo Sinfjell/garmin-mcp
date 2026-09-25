@@ -78,6 +78,16 @@ def permission_for(summary_type: str) -> str | None:
     return None
 
 
+def withdrawn_types(permissions: list[str]) -> set[str]:
+    """Summary types a user no longer shares, given their current permissions."""
+    withdrawn: set[str] = set()
+    if ACTIVITY_PERMISSION not in permissions:
+        withdrawn |= ACTIVITY_TYPES
+    if HEALTH_PERMISSION not in permissions:
+        withdrawn |= HEALTH_TYPES
+    return withdrawn
+
+
 def calendar_date_of(summary: dict) -> str | None:
     """Local calendar date of a summary: ``calendarDate`` or start + offset."""
     if summary.get("calendarDate"):
