@@ -28,6 +28,7 @@ def oauth_env(monkeypatch, tmp_path):
     monkeypatch.setenv("GARMIN_OAUTH_PUBLIC_BASE_URL", "https://example.test")
     monkeypatch.setenv("GARMIN_OAUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("GARMIN_OAUTH_PATH_PREFIX", "/garmin-oauth")
+    monkeypatch.setenv("GARMIN_OAUTH_WEBHOOK_SECRET", "w" * 40)
     return oauth_config.load_oauth_config()
 
 
@@ -213,9 +214,8 @@ def test_refresh_rotates_refresh_token(oauth_env):
 # --- Official client + tool gating ---------------------------------------
 
 
-def test_official_client_maps_dailies(oauth_env):
+def _seeded_client(oauth_env, user_id):
     store = TokenStore(oauth_env.token_root)
-    user_id = "d" * 40
     store.save_tokens(
         user_id,
         TokenBundle(
@@ -223,71 +223,74 @@ def test_official_client_maps_dailies(oauth_env):
             refresh_token="r",
             expires_at=time.time() + 10_000,
             refresh_expires_at=None,
-            garmin_user_id="g",
+            garmin_user_id="g-" + user_id[:4],
         ),
     )
     http = MagicMock()
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.content = b"[]"
-    resp.json.return_value = [
-        {
-            "calendarDate": "2026-09-20",
-            "steps": 8000,
-            "activeKilocalories": 400,
-            "bmrKilocalories": 1500,
-            "restingHeartRateInBeatsPerMinute": 48,
-            "averageStressLevel": 25,
-            "floorsClimbed": 10,
-            "minHeartRateInBeatsPerMinute": 42,
-            "maxHeartRateInBeatsPerMinute": 160,
-            "distanceInMeters": 6000,
-        }
-    ]
-    http.request.return_value = resp
+    return OfficialGarminClient(oauth_env, store, user_id, http=http), http
 
-    client = OfficialGarminClient(oauth_env, store, user_id, http=http)
+
+def test_official_client_maps_dailies_from_store(oauth_env):
+    client, http = _seeded_client(oauth_env, "d" * 40)
+    daily = {
+        "summaryId": "daily-1",
+        "calendarDate": "2026-09-20",
+        "durationInSeconds": 86400,
+        "steps": 8000,
+        "activeKilocalories": 400,
+        "bmrKilocalories": 1500,
+        "restingHeartRateInBeatsPerMinute": 48,
+        "averageStressLevel": 25,
+        "floorsClimbed": 10,
+        "minHeartRateInBeatsPerMinute": 42,
+        "maxHeartRateInBeatsPerMinute": 160,
+        "distanceInMeters": 6000,
+    }
+    # An earlier, partial delivery of the same day must lose to the full one.
+    partial = {**daily, "summaryId": "daily-0", "durationInSeconds": 3600, "steps": 100}
+    client.data.put("dailies", [partial, daily])
+
     stats = client.get_stats("2026-09-20")
     assert stats["totalSteps"] == 8000
     assert stats["totalKilocalories"] == 1900
     assert stats["restingHeartRate"] == 48
+    # Reads never call Garmin: production keys may not pull.
+    http.request.assert_not_called()
 
 
-def test_official_client_lists_activities(oauth_env):
-    store = TokenStore(oauth_env.token_root)
-    user_id = "e" * 40
-    store.save_tokens(
-        user_id,
-        TokenBundle(
-            access_token="a",
-            refresh_token="r",
-            expires_at=time.time() + 10_000,
-            refresh_expires_at=None,
-            garmin_user_id="g",
-        ),
-    )
-    http = MagicMock()
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.content = b"[]"
-    resp.json.return_value = [
-        {
-            "activityId": 99,
-            "activityName": "Easy Run",
-            "activityType": "RUNNING",
-            "distanceInMeters": 5000,
-            "durationInSeconds": 1500,
-            "averageHeartRateInBeatsPerMinute": 140,
-            "startTimeInSeconds": 1_700_000_000,
-            "startTimeOffsetInSeconds": 7200,
-        }
-    ]
-    http.request.return_value = resp
-    client = OfficialGarminClient(oauth_env, store, user_id, http=http)
+def test_official_client_missing_day_says_not_synced(oauth_env):
+    client, _ = _seeded_client(oauth_env, "c" * 40)
+    stats = client.get_stats("2026-09-20")
+    assert stats["calendarDate"] == "2026-09-20"
+    assert "totalSteps" not in stats
+    assert "syncs" in stats["note"]
+
+
+def test_official_client_lists_activities_from_store(oauth_env):
+    client, http = _seeded_client(oauth_env, "e" * 40)
+    run = {
+        "summaryId": "a-99",
+        "activityId": 99,
+        "activityName": "Easy Run",
+        "activityType": "RUNNING",
+        "distanceInMeters": 5000,
+        "durationInSeconds": 1500,
+        "averageHeartRateInBeatsPerMinute": 140,
+        "startTimeInSeconds": 1_700_000_000,
+        "startTimeOffsetInSeconds": 7200,
+    }
+    older = {**run, "summaryId": "a-98", "activityId": 98, "startTimeInSeconds": 1_699_000_000}
+    client.data.put("activities", [older, run])
+
     activities = client.get_activities(0, 5)
-    assert len(activities) == 1
-    assert activities[0]["activityId"] == 99
+    assert [a["activityId"] for a in activities] == [99, 98]
     assert activities[0]["activityType"]["typeKey"] == "running"
+    assert [a["activityId"] for a in client.get_activities(1, 5)] == [98]
+    assert client.get_activity("99")["activityName"] == "Easy Run"
+    # 22:13 UTC plus a +2h offset is the next local day.
+    by_date = client.get_activities_by_date("2023-11-15", "2023-11-15")
+    assert [a["activityId"] for a in by_date] == [99]
+    http.request.assert_not_called()
 
 
 def test_unavailable_metrics_raise(oauth_env):
@@ -364,7 +367,8 @@ def test_oauth_mcp_accepts_public_host_rejects_foreign(oauth_env):
     )
 
     app = build_oauth_app(server.mcp, oauth_env)
-    path = f"/garmin-oauth/{user_id}/mcp"
+    path = "/garmin-oauth/mcp"
+    bearer = "Bearer " + app.auth_provider._issue_tokens("test-client", user_id, []).access_token
     body = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -378,6 +382,7 @@ def test_oauth_mcp_accepts_public_host_rejects_foreign(oauth_env):
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
+        "Authorization": bearer,
     }
 
     # One lifespan: public Host via base_url, foreign Host via header override.
@@ -391,7 +396,7 @@ def test_oauth_mcp_accepts_public_host_rejects_foreign(oauth_env):
         assert "Invalid Host" in bad.text
 
 
-def test_oauth_http_authorize_and_webhook_stubs(oauth_env):
+def test_oauth_webhook_ack_and_old_per_user_urls_gone(oauth_env):
     from starlette.testclient import TestClient
 
     from garmin_mcp.oauth.app import build_oauth_app
@@ -399,20 +404,20 @@ def test_oauth_http_authorize_and_webhook_stubs(oauth_env):
     app = build_oauth_app(server.mcp, oauth_env)
     client = TestClient(app)
 
-    r = client.get("/garmin-oauth/authorize", follow_redirects=False)
-    assert r.status_code == 302
-    assert "connect.garmin.com/oauth2Confirm" in r.headers["location"]
-
-    ping = client.post("/garmin-oauth/webhooks/ping", json={"dailies": []})
+    ping = client.post(f"/garmin-oauth/webhooks/{'w' * 40}/ping", json={"dailies": []})
     assert ping.status_code == 200
     assert ping.json()["status"] == "accepted"
+    app.webhook_worker.wait()
 
-    push = client.post("/garmin-oauth/webhooks/push", json={"activities": []})
+    push = client.post(f"/garmin-oauth/webhooks/{'w' * 40}/push", json={"activities": []})
     assert push.status_code == 200
+    app.webhook_worker.wait()
 
-    unknown = client.get("/garmin-oauth/" + ("z" * 40) + "/mcp")
-    assert unknown.status_code == 404
-    assert unknown.json()["error"] == "Unknown connector URL."
+    # Without the secret segment there is no webhook.
+    assert client.post("/garmin-oauth/webhooks/push", json={"activities": []}).status_code == 404
+
+    # Per-user secret URLs were replaced by one bearer-protected endpoint.
+    assert client.get("/garmin-oauth/" + ("z" * 40) + "/mcp").status_code == 404
 
 
 def test_oauth_app_allows_public_host_from_base_url(oauth_env):
@@ -429,3 +434,39 @@ def test_oauth_app_allows_public_host_from_base_url(oauth_env):
     assert "https://example.test" in ts.allowed_origins
     # Localhost still allowed so bind-address smoke tests keep working.
     assert any(h.startswith("127.0.0.1") for h in ts.allowed_hosts)
+
+
+def test_exchange_fails_without_garmin_user_id(oauth_env):
+    """Ping/Push is routed by Garmin user ID; a tenant without one would never get data."""
+    from garmin_mcp.oauth.errors import OAuthError
+
+    store = TokenStore(oauth_env.token_root)
+    _url, pair = build_authorization_url(oauth_env, store)
+    http = MagicMock()
+    token_response = MagicMock(status_code=200)
+    token_response.json.return_value = {"access_token": "a", "refresh_token": "r", "expires_in": 3600}
+    http.post.return_value = token_response
+    http.get.return_value = MagicMock(status_code=500)
+
+    with pytest.raises(OAuthError, match="user ID"):
+        exchange_code(oauth_env, store, code="c", state=pair.state, http=http)
+    assert [p for p in oauth_env.token_root.iterdir() if not p.name.startswith(".")] == []
+
+
+def test_exchange_fails_without_permissions(oauth_env):
+    """Unknown permissions would mean guessing allow-all or allow-none; consent fails instead."""
+    from garmin_mcp.oauth.errors import OAuthError
+
+    store = TokenStore(oauth_env.token_root)
+    _url, pair = build_authorization_url(oauth_env, store)
+    http = MagicMock()
+    token_response = MagicMock(status_code=200)
+    token_response.json.return_value = {"access_token": "a", "refresh_token": "r", "expires_in": 3600}
+    http.post.return_value = token_response
+    user_response = MagicMock(status_code=200)
+    user_response.json.return_value = {"userId": "garmin-abc"}
+    http.get.side_effect = [user_response, MagicMock(status_code=500)]
+
+    with pytest.raises(OAuthError, match="permissions"):
+        exchange_code(oauth_env, store, code="c", state=pair.state, http=http)
+    assert store.lookup_by_garmin_user_id("garmin-abc") is None

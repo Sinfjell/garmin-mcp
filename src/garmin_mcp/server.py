@@ -20,7 +20,7 @@ from mcp.server.fastmcp import FastMCP
 
 from garmin_mcp import multitenant
 from garmin_mcp.oauth import OfficialApiUnavailableError
-from garmin_mcp.oauth.client import OfficialGarminClient
+from garmin_mcp.oauth.client import OfficialGarminClient, begin_attribution, end_attribution
 from garmin_mcp.oauth.config import AUTH_MODE_OAUTH, is_oauth_mode, load_oauth_config
 from garmin_mcp.oauth.tokens import TokenStore
 
@@ -110,8 +110,8 @@ def get_client() -> Garmin | OfficialGarminClient:
             if multitenant.multi_tenant_active():
                 raise RuntimeError("No tenant token store bound for this request.")
             raise RuntimeError(
-                "OAuth mode requires streamable-http with a per-user path "
-                "(complete /authorize first), or a bound token store."
+                "OAuth mode requires streamable-http and a bearer token issued "
+                "by this server's authorization flow."
             )
         return _oauth_client(tenant_store)
 
@@ -155,6 +155,8 @@ def _tool_call(build: Callable[[Any], Any]) -> str:
     always get a parseable response.
     """
     try:
+        if is_oauth_mode():
+            return json.dumps(_attributed(build), default=str, separators=(",", ":"))
         data = build(get_client())
         return json.dumps(data, default=str, separators=(",", ":"))
     except OfficialApiUnavailableError as exc:
@@ -163,6 +165,23 @@ def _tool_call(build: Callable[[Any], Any]) -> str:
         return json.dumps({"error": "Garmin authentication expired. Run `garmin-mcp-auth` to log in again."})
     except Exception as exc:  # noqa: BLE001 - always return JSON, never raise to the client
         return json.dumps({"error": f"Garmin request failed: {exc}"})
+
+
+_ATTRIBUTION_NOTE = (
+    "Data from Garmin devices via the Garmin Connect Developer Program. Credit it as the "
+    "'attribution' value wherever you show it, and add 'Insights derived in part from Garmin "
+    "device-sourced data.' to anything you derive from it."
+)
+
+
+def _attributed(build: Callable[[Any], Any]) -> dict:
+    """OAuth mode: wrap a tool result with Garmin's required "Garmin [device model]" attribution."""
+    token = begin_attribution()
+    try:
+        data = build(get_client())
+    finally:
+        attribution = end_attribution(token)
+    return {"data": data, "attribution": attribution, "attribution_note": _ATTRIBUTION_NOTE}
 
 
 def _fmt_activity_summary(a: dict) -> dict:
@@ -1047,8 +1066,16 @@ def _run_oauth(host: str, port: int, path_prefix: str | None) -> None:
 
         prefix = path_prefix if path_prefix.startswith("/") else f"/{path_prefix}"
         config = replace(config, path_prefix="/" + prefix.strip("/"))
-    app = build_oauth_app(mcp, config)
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    app = build_oauth_app(mcp, config, on_user_deleted=lambda uid: _evict_oauth_client(config.token_root / uid))
+    # No access log: the webhook URLs carry GARMIN_OAUTH_WEBHOOK_SECRET in the path.
+    uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
+
+
+def _evict_oauth_client(token_dir: Path) -> None:
+    """Drop a deregistered user's cached client so it cannot outlive their data."""
+    client = _oauth_clients.pop(str(token_dir), None)
+    if client is not None:
+        client.close()
 
 
 def _print_tool_list() -> None:

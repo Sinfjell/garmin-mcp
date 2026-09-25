@@ -6,7 +6,50 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Added
+- OAuth mode is an MCP authorization server (MCP authorization spec: RFC 9728
+  resource metadata, RFC 8414 server metadata, RFC 7591 dynamic client
+  registration, OAuth 2.1 + PKCE). Every user adds the same connector URL,
+  `<base>/garmin-oauth/mcp`; claude.ai and ChatGPT run the sign-in: our consent
+  page with the AI-transparency statement and explicit consent, then Garmin's.
+  Access tokens last 1 h, refresh tokens 90 days and rotate on use; only their
+  SHA-256 hashes are stored. Deregistration revokes the user's tokens. The
+  consent form is bound to the browser that loaded it.
+- OAuth mode ingests Ping/Push notifications, as Garmin's production review
+  requires (pull-only integrations are not allowed). The webhook streams the
+  body to a spool file, answers 200, and a background worker applies it:
+  summaries are stored per user in `<token-root>/<user-id>/summaries.sqlite3`,
+  Ping callbacks are followed only on `apis.garmin.com`, and deliveries
+  acknowledged before a restart are processed on start. Bodies up to 128 MB.
+- Deregistration deletes the user's tokens and stored data, but only once
+  Garmin itself rejects the user's tokens (a refused grant, not `invalid_client`
+  or an outage), so neither a forged notification nor our own misconfiguration
+  deletes anyone. A deregistration Garmin has not confirmed yet is retried on
+  the normal schedule; one that races a reconnect is skipped.
+- User permission changes re-read permissions from Garmin and purge stored
+  data behind a withdrawn permission.
+- The last 30 days are requested through Garmin's backfill after consent.
+- OAuth-mode tool results carry Garmin's required attribution:
+  `{"data": …, "attribution": "Garmin Forerunner 965", "attribution_note": …}`,
+  with the device models behind the data, or plain `Garmin` when none is known
+  (Garmin API brand guidelines: downstream, API and AI use). Session mode is unchanged.
+- `GARMIN_OAUTH_WEBHOOK_SECRET` (required in oauth mode) puts the Ping/Push URLs
+  behind a secret path segment; Garmin does not sign notifications. uvicorn's
+  access log is off in oauth mode so the secret never reaches the journal.
+- Failed webhook items are retried after 1 min, 10 min and 1 h; summaries are
+  then parked for at most 7 days, while deregistrations and permission changes
+  keep retrying hourly until applied. Deregistration removes the user from spooled files too.
+
 ### Changed
+- **Breaking (oauth mode):** the per-user secret URLs `/garmin-oauth/<user-id>/mcp`
+  and the direct `/garmin-oauth/authorize` → Garmin flow are removed. Reconnect
+  through the shared connector URL; the same Garmin account gets its data back.
+- OAuth-mode tools read from the local summary store instead of pulling the
+  wellness API on every call.
+- Reconnecting with fewer permissions deletes the data no longer shared.
+- Consent fails if Garmin's user ID or permissions cannot be read after the
+  token exchange, instead of creating a tenant that could never receive data
+  or whose permissions are unknown.
 - Docs and `.env.example` point hosted endpoints at `mcp.productivitytech.io`;
   productivitytech.io itself moves to Vercel and no longer serves MCP routes.
 

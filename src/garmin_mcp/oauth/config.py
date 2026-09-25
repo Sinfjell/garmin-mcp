@@ -24,6 +24,15 @@ PATH_PREFIX_ENV = "GARMIN_OAUTH_PATH_PREFIX"
 # Optional comma-separated Host header values for MCP DNS-rebinding protection
 # (in addition to the hostname from GARMIN_OAUTH_PUBLIC_BASE_URL + localhost).
 ALLOWED_HOSTS_ENV = "GARMIN_OAUTH_ALLOWED_HOSTS"
+# Required secret path segment for the Ping/Push URLs registered in the Garmin
+# portal. Garmin does not sign notifications, so this is what keeps strangers
+# from posting fake summaries into a user's store.
+WEBHOOK_SECRET_ENV = "GARMIN_OAUTH_WEBHOOK_SECRET"
+# Shown on the consent page. The privacy link must point at the Garmin section.
+PRIVACY_URL_ENV = "GARMIN_OAUTH_PRIVACY_URL"
+OPERATOR_ENV = "GARMIN_OAUTH_OPERATOR"
+DEFAULT_PRIVACY_URL = "https://productivitytech.io/privacy-policy/#garmin-data"
+DEFAULT_OPERATOR = "Fjellestad AS"
 
 # FastMCP auto-enables DNS rebinding protection when bound to localhost and
 # only allows these Host patterns unless we widen the list for a public proxy.
@@ -41,7 +50,6 @@ DEFAULT_TOKEN_ROOT = Path.home() / ".garmin-oauth-tokens"
 
 # Refresh this many seconds before access-token expiry (Garmin guidance: ≥600).
 TOKEN_REFRESH_LEEWAY_SECONDS = 600
-MAX_PULL_WINDOW_SECONDS = 24 * 60 * 60
 
 
 def auth_mode() -> str:
@@ -69,6 +77,9 @@ class OAuthConfig:
     public_base_url: str
     path_prefix: str
     allowed_hosts: tuple[str, ...]
+    webhook_secret: str = ""
+    privacy_url: str = DEFAULT_PRIVACY_URL
+    operator: str = DEFAULT_OPERATOR
 
     @property
     def wellness_base(self) -> str:
@@ -158,6 +169,13 @@ def load_oauth_config() -> OAuthConfig:
         os.environ.get(ALLOWED_HOSTS_ENV),
     )
 
+    webhook_secret = (os.environ.get(WEBHOOK_SECRET_ENV) or "").strip()
+    if len(webhook_secret) < 32 or "/" in webhook_secret:
+        raise RuntimeError(
+            f"OAuth mode requires {WEBHOOK_SECRET_ENV}: at least 32 characters, no '/'. "
+            "Garmin does not sign notifications; the secret path is what authenticates them."
+        )
+
     return OAuthConfig(
         client_id=client_id,
         client_secret=client_secret,
@@ -166,4 +184,7 @@ def load_oauth_config() -> OAuthConfig:
         public_base_url=public_base,
         path_prefix=prefix,
         allowed_hosts=allowed_hosts,
+        webhook_secret=webhook_secret,
+        privacy_url=(os.environ.get(PRIVACY_URL_ENV) or "").strip() or DEFAULT_PRIVACY_URL,
+        operator=(os.environ.get(OPERATOR_ENV) or "").strip() or DEFAULT_OPERATOR,
     )

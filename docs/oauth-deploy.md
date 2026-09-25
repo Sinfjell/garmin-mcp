@@ -33,6 +33,7 @@ export GARMIN_OAUTH_PUBLIC_BASE_URL=https://mcp.productivitytech.io
 # export GARMIN_OAUTH_ALLOWED_HOSTS=www.productivitytech.io
 export GARMIN_OAUTH_TOKEN_ROOT=$HOME/.garmin-oauth-tokens   # EU-local disk
 export GARMIN_OAUTH_PATH_PREFIX=/garmin-oauth
+export GARMIN_OAUTH_WEBHOOK_SECRET=...     # required; python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
 Token layout (EU storage assumption — host filesystem in the EU, no US-only deps):
@@ -47,7 +48,7 @@ $GARMIN_OAUTH_TOKEN_ROOT/
 ## Suggested NEW systemd unit (do not edit live units)
 
 Bind a **different** port and path so existing `:8765` / `:8766` stay untouched.
-Suggested: port **8770**, prefix `/garmin-oauth`.
+Production uses port **8771**, prefix `/garmin-oauth`.
 
 Example unit file (create as a new file, e.g. `/etc/systemd/system/garmin-mcp-oauth.service`
 — never overwrite `garmin-mcp.service`):
@@ -69,9 +70,10 @@ Environment=GARMIN_OAUTH_PUBLIC_BASE_URL=https://mcp.productivitytech.io
 # Optional: Environment=GARMIN_OAUTH_ALLOWED_HOSTS=www.productivitytech.io
 Environment=GARMIN_OAUTH_TOKEN_ROOT=/var/www/vhosts/productivitytech.io/.garmin-oauth-tokens
 Environment=GARMIN_OAUTH_PATH_PREFIX=/garmin-oauth
+Environment=GARMIN_OAUTH_WEBHOOK_SECRET=...
 # uvx caches builds: use --refresh when deploying a new git revision
 ExecStart=/usr/local/bin/uvx --refresh --from git+https://github.com/Sinfjell/garmin-mcp@main \
-  garmin-mcp --transport streamable-http --host 127.0.0.1 --port 8770 --path /garmin-oauth
+  garmin-mcp --transport streamable-http --host 127.0.0.1 --port 8771 --path /garmin-oauth
 Restart=always
 RestartSec=5
 
@@ -84,13 +86,17 @@ After `daemon-reload` + `start`, check **both** `systemctl is-active` and
 
 ## Reverse proxy
 
-Point only the oauth prefix at 127.0.0.1:8770. Leave existing locations for
-the unofficial connectors alone.
+Point the oauth prefix and its two discovery documents at 127.0.0.1:8771
+(8770 is `personal-context-mcp`). Leave existing locations for the unofficial
+connectors alone.
 
 ```nginx
 location /garmin-oauth/ {
-    proxy_pass http://127.0.0.1:8770;
+    proxy_pass http://127.0.0.1:8771;
     proxy_http_version 1.1;
+    # Garmin pushes up to 100 MB of activity data; nginx's default is 1 MB and
+    # would answer 413 before the app sees the request.
+    client_max_body_size 128m;
     proxy_set_header Host $host;
     # Keep the public Host. garmin-mcp allows it via
     # GARMIN_OAUTH_PUBLIC_BASE_URL (MCP DNS-rebinding allowlist). Do NOT rewrite
@@ -99,6 +105,27 @@ location /garmin-oauth/ {
     proxy_set_header X-Forwarded-Proto $scheme;
     # MCP streamable HTTP may use SSE
     proxy_buffering off;
+}
+
+# The webhook paths carry GARMIN_OAUTH_WEBHOOK_SECRET: keep them out of the
+# access log (the app itself runs uvicorn with access_log=False).
+location /garmin-oauth/webhooks/ {
+    access_log off;
+    proxy_pass http://127.0.0.1:8771;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    client_max_body_size 128m;
+}
+
+# MCP clients discover the authorization server from these two documents
+# (RFC 9728 and RFC 8414). They live outside /garmin-oauth/ by specification.
+location = /.well-known/oauth-protected-resource/garmin-oauth/mcp {
+    proxy_pass http://127.0.0.1:8771;
+    proxy_set_header Host $host;
+}
+location = /.well-known/oauth-authorization-server/garmin-oauth {
+    proxy_pass http://127.0.0.1:8771;
+    proxy_set_header Host $host;
 }
 ```
 
@@ -111,54 +138,104 @@ public hostname stays visible to the process.
 
 ### Smoke: public Host must not 421
 
-After deploy, with a real connector user-id (or any path that reaches the MCP
-transport — a 404 from our router is fine for host checks only if you hit
-`/mcp` after rewrite; easier is an existing tenant URL):
-
-```bash
-# Expect JSON-RPC / MCP response, NOT "Invalid Host header" with status 421
-curl -sS -o /tmp/mcp-out -w '%{http_code}\n' \
-  -H 'Host: productivitytech.io' \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}' \
-  https://mcp.productivitytech.io/garmin-oauth/<user-id>/mcp
-```
-
-A `421` body of `Invalid Host header` means the allowlist did not include the
-Host nginx forwarded — check `GARMIN_OAUTH_PUBLIC_BASE_URL` / `ALLOWED_HOSTS`
-and restart with `uvx --refresh`.
+Unauthenticated requests get 401 from the router before FastMCP's Host check
+runs, so a bare curl cannot prove the allowlist. The connector working in
+claude.ai (smoke step 5–7) does. If it fails with **421** `Invalid Host header`,
+the allowlist did not include the Host nginx forwarded — check
+`GARMIN_OAUTH_PUBLIC_BASE_URL` / `ALLOWED_HOSTS` and restart with `uvx --refresh`.
 
 ## Portal URLs to register
 
-On the evaluation app «Garmin MCP»:
+On the evaluation app «Garmin MCP». `GARMIN_OAUTH_WEBHOOK_SECRET` is required
+in oauth mode (≥ 32 characters, no `/`; the process refuses to start without
+it) — Garmin does not sign notifications, so the secret path segment is what
+authenticates them:
 
 | Purpose | URL |
 |---|---|
 | OAuth redirect | `https://mcp.productivitytech.io/garmin-oauth/callback` |
-| Ping webhook | `https://mcp.productivitytech.io/garmin-oauth/webhooks/ping` |
-| Push webhook | `https://mcp.productivitytech.io/garmin-oauth/webhooks/push` |
+| Ping webhook | `https://mcp.productivitytech.io/garmin-oauth/webhooks/<secret>/ping` |
+| Push webhook | `https://mcp.productivitytech.io/garmin-oauth/webhooks/<secret>/push` |
 
-Ping/Push handlers currently **acknowledge with HTTP 200** and do not ingest
-payloads (documented stubs for the eval program). Pull is used for smoke tests.
+Enable **Deregistration** and **User Permission** notifications and point them
+at the Ping URL. Summary types may use either Ping or Push; the handler is the
+same. Do not paste the secret into chat or tickets.
+
+## How notifications are processed
+
+1. The handler streams the body (≤ 128 MB) to `$TOKEN_ROOT/.inbox/*.json` and
+   answers **200** before doing anything else.
+2. One worker thread applies spool files in arrival order. On start, files left
+   from before a restart are processed; half-written `.partial` files are dropped.
+3. Summaries are upserted per user into `$TOKEN_ROOT/<user-id>/summaries.sqlite3`
+   (0600). Ping callbacks are fetched with that user's bearer token, and only
+   from `apis.garmin.com`.
+4. **Deregistration**: the user's directory (tokens + data) and Garmin-ID index
+   entry are deleted — only after Garmin rejects the user's token on
+   `GET /user/id`. A 200 there means the notification is ignored.
+5. **Permission change**: permissions are re-read from Garmin; data behind a
+   withdrawn `ACTIVITY_EXPORT` / `HEALTH_EXPORT` is purged.
+6. Items that fail (Garmin 5xx, timeouts) are written to `.inbox/retry/` and
+   retried after 1 min, 10 min and 1 h — also across a restart. After the last
+   retry, summaries are parked in `.inbox/failed/` and deleted after 7 days.
+   Deregistrations and permission changes are never parked: they retry hourly
+   until Garmin answers, so a deletion Garmin asked for always happens. All writes
+   are idempotent, so replaying a parked file (move it to `.inbox/`, restart) is safe.
+7. Deregistration also removes the user's items from every spooled file.
+
+After consent the server requests 30 days of backfill for activities, dailies,
+sleeps, stressDetails, hrv and userMetrics; the data then arrives as ordinary
+Ping/Push notifications. Tools answer from the local store only.
 
 ## Endpoints this process serves
 
 | Method | Path | Role |
 |---|---|---|
-| GET | `/garmin-oauth/authorize` | Start PKCE; redirect to Garmin consent |
-| GET | `/garmin-oauth/callback` | Exchange code; create tenant token store; show MCP URL |
-| POST | `/garmin-oauth/webhooks/ping` | Stub 200 |
-| POST | `/garmin-oauth/webhooks/push` | Stub 200 |
-| * | `/garmin-oauth/<user-id>/mcp` | Streamable MCP for that user only |
+| * | `/garmin-oauth/mcp` | Streamable MCP; bearer token decides whose data. 401 + discovery hint without one |
+| GET | `/.well-known/oauth-protected-resource/garmin-oauth/mcp` | RFC 9728 resource metadata |
+| GET | `/.well-known/oauth-authorization-server/garmin-oauth` | RFC 8414 server metadata (also under `/garmin-oauth/.well-known/…`) |
+| POST | `/garmin-oauth/register` | Dynamic client registration (RFC 7591) |
+| GET | `/garmin-oauth/authorize` | MCP client starts here; parks the request, sends the user to consent |
+| GET/POST | `/garmin-oauth/consent` | AI-transparency statement + explicit consent, then Garmin |
+| GET | `/garmin-oauth/callback` | Garmin returns here; code exchanged, user created, client gets our code |
+| POST | `/garmin-oauth/token` | Code/refresh → our access token (1 h) + rotating refresh token (90 d) |
+| POST | `/garmin-oauth/revoke` | Token revocation |
+| POST | `/garmin-oauth/webhooks[/<secret>]/ping` | Spool, 200, process in background |
+| POST | `/garmin-oauth/webhooks[/<secret>]/push` | Same handler |
+
+Every user adds the **same** connector URL, `https://mcp.productivitytech.io/garmin-oauth/mcp`,
+in claude.ai (Settings → Connectors → Add custom connector) or ChatGPT; the client
+runs the login itself. The old per-user URLs (`/garmin-oauth/<user-id>/mcp`) are
+gone — anyone who connected through one must add the connector again. Reconnecting
+with the same Garmin account reuses the same stored data.
+
+MCP auth state (registered clients, pending requests, SHA-256 hashes of codes and
+tokens) lives in `$TOKEN_ROOT/.mcp-auth.sqlite3`. Deregistration revokes all of a
+user's MCP tokens along with their data.
+
+Lifetimes: access token 1 h, refresh token 90 days (rotated on every use, the old
+pair dies; a refresh token can be claimed once even under concurrent requests;
+granted scopes carry over), authorization code 5 min, parked authorization request 15 min.
+Dynamic client registration is open, as the MCP spec expects: any client can
+register, but every sign-in passes our consent page (which names the client and
+the host it returns to) and Garmin's. The consent form only accepts a POST from
+the browser that loaded it (per-request cookie), for approve and cancel alike.
+Consent fails — and no user is created — if Garmin's user ID or permissions
+cannot be read after the token exchange.
 
 ## Smoke checklist (human)
 
 1. Create/confirm eval app redirect URI + Ping/Push URLs in the Garmin portal.
 2. Set the env vars above on the host (secrets from 1Password — never git).
-3. Start the **new** unit on port 8770; confirm existing units unchanged.
-4. Open `https://mcp.productivitytech.io/garmin-oauth/authorize`, complete consent.
-5. Copy the printed MCP URL (`.../garmin-oauth/<user-id>/mcp`).
-6. `initialize` against that URL; call `get_daily_stats` and `list_recent_activities`.
-7. Confirm `get_training_status` / `get_personal_records` / `get_performance_metrics`
-   return a clear «not available via official API» error (no fake numbers).
+3. Restart the unit on port 8771 (with `uvx --refresh`); confirm the other units are unchanged.
+4. `curl -si https://mcp.productivitytech.io/garmin-oauth/mcp -X POST` → 401 with a
+   `resource_metadata=` hint; both `/.well-known/…` URLs return JSON (not nginx HTML).
+5. In claude.ai, add the connector `https://mcp.productivitytech.io/garmin-oauth/mcp`
+   and complete our consent page and Garmin's. Screenshot each step for the review.
+6. Within a few minutes, `ls $TOKEN_ROOT/<user-id>/` shows `summaries.sqlite3`
+   (backfill arriving) and `.inbox/` is empty; `.inbox/failed/` must stay empty.
+7. Ask the assistant for yesterday's steps and recent activities.
+8. In Garmin's Data Generator, send a Push and a Ping for the test user; repeat 7.
+9. Run Partner Verification; it checks deregistration, permissions and the 200s.
+10. Confirm `get_training_status` / `get_personal_records` / `get_performance_metrics`
+    return a clear «not available via official API» error (no fake numbers).

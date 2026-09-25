@@ -12,7 +12,8 @@ from garmin_mcp.oauth.config import (
     OAUTH_TOKEN_URL,
     OAuthConfig,
 )
-from garmin_mcp.oauth.errors import StateMismatchError, TokenExchangeError
+from garmin_mcp.oauth.datastore import SummaryStore, withdrawn_types
+from garmin_mcp.oauth.errors import OAuthError, StateMismatchError, TokenExchangeError
 from garmin_mcp.oauth.pkce import PkcePair, new_pkce_pair
 from garmin_mcp.oauth.tokens import PendingAuth, TokenBundle, TokenStore, new_user_id
 
@@ -47,8 +48,16 @@ def _token_request(config: OAuthConfig, data: dict[str, str], *, http: httpx.Cli
         if owns:
             client.close()
     if response.status_code >= 400:
-        raise TokenExchangeError(response.status_code)
+        raise TokenExchangeError(response.status_code, _oauth_error_code(response))
     return response.json()
+
+
+def _oauth_error_code(response: httpx.Response) -> str | None:
+    try:
+        code = response.json().get("error")
+    except (ValueError, AttributeError):
+        return None
+    return code if isinstance(code, str) and len(code) < 64 else None
 
 
 def _bundle_from_token_response(
@@ -70,6 +79,22 @@ def _bundle_from_token_response(
         scope=payload.get("scope"),
         permissions=permissions,
     )
+
+
+def _identify(config: OAuthConfig, access: str, *, http: httpx.Client | None) -> tuple[str, list[str]]:
+    """Garmin user ID and permissions for a fresh token; consent fails without either."""
+    garmin_user_id = fetch_garmin_user_id(config, access, http=http)
+    if not garmin_user_id:
+        # Every Ping/Push names the Garmin user ID; without it this user's data
+        # could never be routed to them. Fail the consent rather than create
+        # a tenant that silently never receives anything.
+        raise OAuthError("Garmin user ID unavailable after token exchange")
+    permissions = fetch_permissions(config, access, http=http)
+    if permissions is None:
+        # Unknown permissions would have to mean "allow all" or "allow none";
+        # neither is right, so the consent fails and the user can retry.
+        raise OAuthError("Garmin permissions unavailable after token exchange")
+    return garmin_user_id, permissions
 
 
 def exchange_code(
@@ -103,17 +128,17 @@ def exchange_code(
     # Clear verifier from memory as soon as the exchange uses it.
     del pending
 
-    access = str(payload["access_token"])
-    garmin_user_id = fetch_garmin_user_id(config, access, http=http) or ""
-    permissions = fetch_permissions(config, access, http=http)
+    garmin_user_id, permissions = _identify(config, str(payload["access_token"]), http=http)
 
     # Prefer reusing an existing local ID when the same Garmin account reconnects.
-    user_id = store.lookup_by_garmin_user_id(garmin_user_id) if garmin_user_id else None
-    user_id = user_id or new_user_id()
+    user_id = store.lookup_by_garmin_user_id(garmin_user_id) or new_user_id()
     bundle = _bundle_from_token_response(
         payload, garmin_user_id=garmin_user_id, permissions=permissions
     )
+    bundle.connected_at = time.time()
     store.save_tokens(user_id, bundle)
+    # A reconnect may share less than before: drop what is no longer shared.
+    SummaryStore(store.user_dir(user_id)).purge(withdrawn_types(permissions))
     return user_id, bundle
 
 
@@ -145,6 +170,7 @@ def refresh_tokens(
     )
     if updated.scope is None:
         updated.scope = bundle.scope
+    updated.connected_at = bundle.connected_at
     store.save_tokens(user_id, updated)
     return updated
 

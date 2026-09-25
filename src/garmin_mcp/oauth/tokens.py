@@ -5,6 +5,7 @@ Layout under ``GARMIN_OAUTH_TOKEN_ROOT``::
     <root>/<user-id>/tokens.json     # access + refresh + garmin user id
     <root>/.pending/<state>.json     # PKCE verifier awaiting callback
     <root>/.by-garmin/<garmin-id>    # symlink or marker file → user-id
+    <root>/<user-id>/summaries.sqlite3  # Ping/Push data (see datastore.py)
 
 Permissions: directories 0o700, token files 0o600. A password never appears here —
 only OAuth tokens issued by Garmin after consent.
@@ -14,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import shutil
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -41,6 +43,8 @@ class TokenBundle:
     garmin_user_id: str
     scope: str | None = None
     permissions: list[str] | None = None
+    # When the user gave consent. A refresh keeps it; a reconnect replaces it.
+    connected_at: float | None = None
 
     def access_expired(self, *, now: float | None = None, leeway: int = TOKEN_REFRESH_LEEWAY_SECONDS) -> bool:
         now = time.time() if now is None else now
@@ -58,7 +62,8 @@ class TokenBundle:
             refresh_expires_at=(float(data["refresh_expires_at"]) if data.get("refresh_expires_at") is not None else None),
             garmin_user_id=str(data.get("garmin_user_id") or ""),
             scope=data.get("scope"),
-            permissions=list(data["permissions"]) if data.get("permissions") else None,
+            permissions=list(data["permissions"]) if data.get("permissions") is not None else None,
+            connected_at=float(data["connected_at"]) if data.get("connected_at") is not None else None,
         )
 
 
@@ -181,3 +186,21 @@ class TokenStore:
         tmp.write_text(user_id, encoding="utf-8")
         os.chmod(tmp, 0o600)
         tmp.replace(marker)
+
+    def delete_user(self, user_id: str) -> bool:
+        """Remove a user's tokens, stored summaries, and Garmin-ID index entry.
+
+        Used on Garmin deregistration: nothing about the user may remain.
+        Returns False when no such user exists.
+        """
+        directory = self.resolve_existing(user_id)
+        if directory is None:
+            return False
+        try:
+            garmin_user_id = self.load_tokens(user_id).garmin_user_id
+        except (OSError, ValueError, KeyError):
+            garmin_user_id = ""
+        shutil.rmtree(directory)
+        if garmin_user_id and "/" not in garmin_user_id and ".." not in garmin_user_id:
+            (self.by_garmin_dir / garmin_user_id).unlink(missing_ok=True)
+        return True
