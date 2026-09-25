@@ -68,8 +68,8 @@ def _approve(http: TestClient, consent_url: str) -> str:
     return r.headers["location"]
 
 
-def _connect(http: TestClient) -> dict:
-    """Run the whole flow; returns the token response."""
+def _code(http: TestClient) -> tuple[str, str, str]:
+    """Run the flow up to the redirect back to the client: (client_id, verifier, code)."""
     verifier, challenge = _pkce()
     client_id = _register_client(http)
     garmin_url = _approve(http, _authorize(http, client_id, challenge))
@@ -81,15 +81,21 @@ def _connect(http: TestClient) -> dict:
     assert f"{location.scheme}://{location.netloc}{location.path}" == REDIRECT
     query = parse_qs(location.query)
     assert query["state"] == ["client-state"]
+    return client_id, verifier, query["code"][0]
+
+
+def _connect(http: TestClient) -> dict:
+    """Run the whole flow; returns the token response."""
+    client_id, verifier, code = _code(http)
     r = http.post("/garmin-oauth/token", data={
         "grant_type": "authorization_code",
-        "code": query["code"][0],
+        "code": code,
         "redirect_uri": REDIRECT,
         "client_id": client_id,
         "code_verifier": verifier,
     })
     assert r.status_code == 200, r.text
-    return {**r.json(), "client_id": client_id, "code": query["code"][0], "verifier": verifier}
+    return {**r.json(), "client_id": client_id, "code": code, "verifier": verifier}
 
 
 def _daily_steps(http: TestClient, token: str) -> str:
@@ -196,6 +202,7 @@ def test_consent_requires_the_checkbox(app):
 def test_cancel_returns_access_denied_to_the_client(app):
     with TestClient(app, base_url=BASE) as http:
         consent_url = _authorize(http, _register_client(http), _pkce()[1])
+        http.get(consent_url)
         request_id = parse_qs(urlparse(consent_url).query)["request"][0]
         r = http.post("/garmin-oauth/consent", data={"request": request_id, "decision": "deny"},
                       follow_redirects=False)
@@ -243,3 +250,44 @@ def test_expired_garmin_state_shows_a_page_not_a_redirect(app):
         r = http.get("/garmin-oauth/callback", params={"code": "x", "state": "unknown"}, follow_redirects=False)
     assert r.status_code == 400
     assert "expired" in r.text
+
+
+def test_forged_cancel_is_refused(app):
+    """A cross-site POST that knows the request ID may not cancel it either."""
+    victim = TestClient(app, base_url=BASE)
+    with TestClient(app, base_url=BASE) as http:
+        consent_url = _authorize(http, _register_client(http), _pkce()[1])
+        http.get(consent_url)
+        request_id = parse_qs(urlparse(consent_url).query)["request"][0]
+        forged = victim.post("/garmin-oauth/consent", data={"request": request_id, "decision": "deny"},
+                             follow_redirects=False)
+        assert forged.status_code == 400
+        # The real user's approval still works.
+        r = http.post("/garmin-oauth/consent", data={"request": request_id, "consent": "yes",
+                                                      "decision": "approve"}, follow_redirects=False)
+        assert r.headers["location"].startswith("https://connect.garmin.com/oauth2Confirm")
+
+
+def test_two_consent_tabs_do_not_clobber_each_other(app):
+    with TestClient(app, base_url=BASE) as http:
+        client_id = _register_client(http)
+        first = _authorize(http, client_id, _pkce()[1])
+        second = _authorize(http, client_id, _pkce()[1])
+        http.get(first)
+        http.get(second)
+        # Submit the first tab without reloading it: its cookie must still be there.
+        request_id = parse_qs(urlparse(first).query)["request"][0]
+        r = http.post("/garmin-oauth/consent", data={"request": request_id, "consent": "yes",
+                                                      "decision": "approve"}, follow_redirects=False)
+        assert r.headers["location"].startswith("https://connect.garmin.com/oauth2Confirm")
+
+
+def test_authorization_codes_are_not_stored_in_plaintext(app, oauth_env):
+    with TestClient(app, base_url=BASE) as http:
+        _client_id, _verifier, pending_code = _code(http)  # issued, not yet exchanged
+        raw = (oauth_env.token_root / ".mcp-auth.sqlite3").read_bytes()
+        assert pending_code.encode() not in raw
+        tokens = _connect(http)
+    raw = (oauth_env.token_root / ".mcp-auth.sqlite3").read_bytes()
+    assert tokens["access_token"].encode() not in raw
+    assert tokens["refresh_token"].encode() not in raw

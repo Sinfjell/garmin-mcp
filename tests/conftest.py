@@ -18,6 +18,9 @@ from garmin_mcp.oauth.tokens import TokenBundle, TokenStore
 USER_A = "a" * 40
 USER_B = "b" * 40
 BOTH = ["ACTIVITY_EXPORT", "HEALTH_EXPORT"]
+WEBHOOK_SECRET = "w" * 40
+PUSH = f"/garmin-oauth/webhooks/{WEBHOOK_SECRET}/push"
+PING = f"/garmin-oauth/webhooks/{WEBHOOK_SECRET}/ping"
 
 
 class FakeGarmin:
@@ -27,6 +30,8 @@ class FakeGarmin:
         self.requests: list[httpx.Request] = []
         self.callback_payload: list[dict] = []
         self.user_id_status = 200
+        self.token_status = 200
+        self.callback_status = 200
         self.permissions = BOTH
         self.garmin_user_id = "garmin-new"
         self.token_forms: list[dict] = []
@@ -41,9 +46,11 @@ class FakeGarmin:
         if "/backfill/" in path:
             return httpx.Response(202)
         if path.endswith("/dailies"):
-            return httpx.Response(200, json=self.callback_payload)
+            return httpx.Response(self.callback_status, json=self.callback_payload)
         if path.endswith("/oauth/token"):
             self.token_forms.append(dict(httpx.QueryParams(request.content.decode())))
+            if self.token_status != 200:
+                return httpx.Response(self.token_status)
             return httpx.Response(200, json={
                 "access_token": f"garmin-access-{len(self.token_forms)}",
                 "refresh_token": "garmin-refresh",
@@ -75,7 +82,7 @@ def oauth_env(monkeypatch, tmp_path):
     monkeypatch.setenv("GARMIN_OAUTH_REDIRECT_URI", "https://example.test/garmin-oauth/callback")
     monkeypatch.setenv("GARMIN_OAUTH_PUBLIC_BASE_URL", "https://example.test")
     monkeypatch.setenv("GARMIN_OAUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
-    monkeypatch.delenv("GARMIN_OAUTH_WEBHOOK_SECRET", raising=False)
+    monkeypatch.setenv("GARMIN_OAUTH_WEBHOOK_SECRET", WEBHOOK_SECRET)
     yield oauth_config.load_oauth_config()
     server._oauth_clients.clear()
     multitenant._multi_tenant_active = False

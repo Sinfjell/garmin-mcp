@@ -91,16 +91,14 @@ class GarminAuthProvider:
         self._consent_url = consent_url
         self._tokens = tokens
         Path(token_root).mkdir(mode=0o700, parents=True, exist_ok=True)
-        with closing(self._connect()):
-            pass
+        new = not self._path.exists()
+        with closing(sqlite3.connect(self._path, timeout=30)) as conn:
+            if new:
+                os.chmod(self._path, 0o600)
+            conn.executescript(_SCHEMA)
 
     def _connect(self) -> sqlite3.Connection:
-        new = not self._path.exists()
-        conn = sqlite3.connect(self._path, timeout=30)
-        if new:
-            os.chmod(self._path, 0o600)
-        conn.executescript(_SCHEMA)
-        return conn
+        return sqlite3.connect(self._path, timeout=30)
 
     # --- Clients (RFC 7591) --------------------------------------------
 
@@ -123,6 +121,7 @@ class GarminAuthProvider:
         request_id = secrets.token_urlsafe(32)
         with closing(self._connect()) as conn, conn:
             conn.execute("DELETE FROM requests WHERE created_at < ?", (time.time() - REQUEST_TTL,))
+            conn.execute("DELETE FROM codes WHERE expires_at < ?", (time.time(),))
             conn.execute(
                 "INSERT INTO requests VALUES (?, ?, ?, '', NULL, ?)",
                 (request_id, client.client_id, params.model_dump_json(), time.time()),
@@ -189,7 +188,9 @@ class GarminAuthProvider:
         with closing(self._connect()) as conn, conn:
             conn.execute(
                 "INSERT INTO codes VALUES (?, ?, ?, ?, ?)",
-                (_hash(code), pending.client_id, user_id, auth_code.model_dump_json(), auth_code.expires_at),
+                # The code itself is not stored, only its hash (the lookup key).
+                (_hash(code), pending.client_id, user_id, auth_code.model_copy(update={"code": ""}).model_dump_json(),
+                 auth_code.expires_at),
             )
         return code
 

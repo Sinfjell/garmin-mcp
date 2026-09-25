@@ -27,8 +27,11 @@ All notable changes to this project are documented here. Format follows
 - User permission changes re-read permissions from Garmin and purge stored
   data behind a withdrawn permission.
 - The last 30 days are requested through Garmin's backfill after consent.
-- Optional `GARMIN_OAUTH_WEBHOOK_SECRET` puts the Ping/Push URLs behind a
-  secret path segment; Garmin does not sign notifications.
+- `GARMIN_OAUTH_WEBHOOK_SECRET` (required in oauth mode) puts the Ping/Push URLs
+  behind a secret path segment; Garmin does not sign notifications. uvicorn's
+  access log is off in oauth mode so the secret never reaches the journal.
+- Failed webhook items are retried after 1 min, 10 min and 1 h, then parked for
+  at most 7 days. Deregistration removes the user from spooled files too.
 
 ### Changed
 - **Breaking (oauth mode):** the per-user secret URLs `/garmin-oauth/<user-id>/mcp`
@@ -36,8 +39,9 @@ All notable changes to this project are documented here. Format follows
   through the shared connector URL; the same Garmin account gets its data back.
 - OAuth-mode tools read from the local summary store instead of pulling the
   wellness API on every call.
-- Consent fails if Garmin's user ID cannot be read after the token exchange,
-  instead of creating a tenant that could never receive data.
+- Consent fails if Garmin's user ID or permissions cannot be read after the
+  token exchange, instead of creating a tenant that could never receive data
+  or whose permissions are unknown.
 - Docs and `.env.example` point hosted endpoints at `mcp.productivitytech.io`;
   productivitytech.io itself moves to Vercel and no longer serves MCP routes.
 

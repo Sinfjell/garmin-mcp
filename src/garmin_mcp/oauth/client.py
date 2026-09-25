@@ -101,10 +101,12 @@ class OfficialGarminClient:
         """
         try:
             self._request("GET", self._wellness("user/id"))
-        except TokenExchangeError:
-            return False
-        except GarminApiError as exc:
-            if exc.status_code in (401, 403):
+        except (TokenExchangeError, GarminApiError) as exc:
+            # 400/401 from the token endpoint is a refused refresh token; 401/403
+            # from the API is a refused access token. Anything else (429, 5xx)
+            # says nothing about the registration and must not delete anyone.
+            refused = (400, 401) if isinstance(exc, TokenExchangeError) else (401, 403)
+            if exc.status_code in refused:
                 return False
             raise
         return True
@@ -113,8 +115,11 @@ class OfficialGarminClient:
         """The user's permissions as Garmin reports them now (not as a webhook claims)."""
         payload = self._request("GET", self._wellness("user/permissions")).json()
         if isinstance(payload, dict):
-            payload = payload.get("permissions", [])
-        return [str(p) for p in payload] if isinstance(payload, list) else []
+            payload = payload.get("permissions")
+        if not isinstance(payload, list):
+            # Never read an unexpected shape as "everything withdrawn": that purges data.
+            raise TypeError("unexpected permissions payload")
+        return [str(p) for p in payload]
 
     def request_backfill(self, summary_type: str, start_ts: int, end_ts: int) -> None:
         """Ask Garmin to redeliver history for one type; data arrives via Ping/Push."""

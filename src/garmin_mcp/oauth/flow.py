@@ -111,6 +111,10 @@ def exchange_code(
         # a tenant that silently never receives anything.
         raise OAuthError("Garmin user ID unavailable after token exchange")
     permissions = fetch_permissions(config, access, http=http)
+    if permissions is None:
+        # Unknown permissions would have to mean "allow all" or "allow none";
+        # neither is right, so the consent fails and the user can retry.
+        raise OAuthError("Garmin permissions unavailable after token exchange")
 
     # Prefer reusing an existing local ID when the same Garmin account reconnects.
     user_id = store.lookup_by_garmin_user_id(garmin_user_id) or new_user_id()

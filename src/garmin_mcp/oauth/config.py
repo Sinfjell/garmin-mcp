@@ -24,7 +24,7 @@ PATH_PREFIX_ENV = "GARMIN_OAUTH_PATH_PREFIX"
 # Optional comma-separated Host header values for MCP DNS-rebinding protection
 # (in addition to the hostname from GARMIN_OAUTH_PUBLIC_BASE_URL + localhost).
 ALLOWED_HOSTS_ENV = "GARMIN_OAUTH_ALLOWED_HOSTS"
-# Optional secret path segment for the Ping/Push URLs registered in the Garmin
+# Required secret path segment for the Ping/Push URLs registered in the Garmin
 # portal. Garmin does not sign notifications, so this is what keeps strangers
 # from posting fake summaries into a user's store.
 WEBHOOK_SECRET_ENV = "GARMIN_OAUTH_WEBHOOK_SECRET"
@@ -77,7 +77,7 @@ class OAuthConfig:
     public_base_url: str
     path_prefix: str
     allowed_hosts: tuple[str, ...]
-    webhook_secret: str | None = None
+    webhook_secret: str = ""
     privacy_url: str = DEFAULT_PRIVACY_URL
     operator: str = DEFAULT_OPERATOR
 
@@ -169,9 +169,12 @@ def load_oauth_config() -> OAuthConfig:
         os.environ.get(ALLOWED_HOSTS_ENV),
     )
 
-    webhook_secret = (os.environ.get(WEBHOOK_SECRET_ENV) or "").strip() or None
-    if webhook_secret is not None and (len(webhook_secret) < 32 or "/" in webhook_secret):
-        raise RuntimeError(f"{WEBHOOK_SECRET_ENV} must be at least 32 characters and contain no '/'.")
+    webhook_secret = (os.environ.get(WEBHOOK_SECRET_ENV) or "").strip()
+    if len(webhook_secret) < 32 or "/" in webhook_secret:
+        raise RuntimeError(
+            f"OAuth mode requires {WEBHOOK_SECRET_ENV}: at least 32 characters, no '/'. "
+            "Garmin does not sign notifications; the secret path is what authenticates them."
+        )
 
     return OAuthConfig(
         client_id=client_id,

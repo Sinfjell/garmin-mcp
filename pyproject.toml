@@ -37,6 +37,9 @@ dependencies = [
     # Official OAuth path (GARMIN_AUTH_MODE=oauth): token exchange + wellness API.
     # Also pulled transitively by mcp; declared so the ceiling is explicit.
     "httpx>=0.27,<1",
+    # oauth mode moves blocking Garmin calls off the event loop with anyio.to_thread.
+    # Transitive via starlette; declared so the ceiling is explicit.
+    "anyio>=4,<5",
 ]
 
 [project.optional-dependencies]

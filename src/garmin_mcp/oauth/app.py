@@ -5,6 +5,8 @@ Does not touch the live unofficial units on other ports/paths.
 """
 from __future__ import annotations
 
+import functools
+import hashlib
 import json
 import logging
 import os
@@ -13,6 +15,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs
 
+import anyio.to_thread
 from mcp.server.auth.routes import build_resource_metadata_url, create_auth_routes, create_protected_resource_routes
 from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
 from mcp.server.transport_security import TransportSecuritySettings
@@ -37,7 +40,12 @@ from garmin_mcp.oauth.webhooks import (
 
 log = logging.getLogger(__name__)
 
-_CONSENT_COOKIE = "garmin_mcp_consent"
+_CONSENT_COOKIE_PREFIX = "garmin_mcp_consent_"
+
+
+def _consent_cookie(request_id: str) -> str:
+    """One cookie per parked request, so two open consent tabs never clobber each other."""
+    return _CONSENT_COOKIE_PREFIX + hashlib.sha256(request_id.encode()).hexdigest()[:16]
 
 
 def _apply_oauth_transport_security(mcp: Any, config: OAuthConfig) -> None:
@@ -91,10 +99,8 @@ def _html_response(send: Any, status: int, html: str) -> Any:
 
 
 def _webhook_paths(config: OAuthConfig) -> tuple[str, ...]:
-    """Ping and Push URLs; behind a secret segment when one is configured."""
-    base = f"{config.path_prefix}/webhooks"
-    if config.webhook_secret:
-        base = f"{base}/{config.webhook_secret}"
+    """Ping and Push URLs, behind the secret segment (Garmin does not sign notifications)."""
+    base = f"{config.path_prefix}/webhooks/{config.webhook_secret}"
     return (f"{base}/ping", f"{base}/push")
 
 
@@ -107,7 +113,10 @@ async def _spool_body(receive: Any, inbox: WebhookInbox) -> Path | None:
         while True:
             message = await receive()
             if message["type"] != "http.request":
-                break
+                # Client went away mid-upload: never queue a truncated body.
+                fh.close()
+                partial.unlink(missing_ok=True)
+                return None
             chunk = message.get("body", b"")
             total += len(chunk)
             if total > MAX_BODY_BYTES:
@@ -123,6 +132,7 @@ async def _spool_body(receive: Any, inbox: WebhookInbox) -> Path | None:
 async def _handle_webhook(receive: Any, send: Any, worker: WebhookWorker) -> None:
     path = await _spool_body(receive, worker.inbox)
     if path is None:
+        # Too large, or the connection dropped (then nobody reads this anyway).
         await _json_response(send, 413, {"error": "Payload too large."})
         return
     # Acknowledge first; Garmin wants 200 within 30 s and processing afterwards.
@@ -183,7 +193,7 @@ class OAuthRoutes:
 
     async def consent(self, scope: dict, receive: Any, send: Any) -> None:
         if scope.get("method", "GET").upper() == "POST":
-            await self._consent_post(receive, send, _cookie(scope, _CONSENT_COOKIE))
+            await self._consent_post(scope, receive, send)
             return
         pending = self.provider.load_request(_query(scope).get("request", ""))
         if pending is None:
@@ -198,7 +208,8 @@ class OAuthRoutes:
                 (b"content-type", b"text/html; charset=utf-8"),
                 (b"cache-control", b"no-store"),
                 (b"x-frame-options", b"DENY"),
-                (b"set-cookie", f"{_CONSENT_COOKIE}={browser_token}{self._cookie_attrs}".encode()),
+                (b"set-cookie",
+                 f"{_consent_cookie(pending.request_id)}={browser_token}{self._cookie_attrs}".encode()),
             ],
         })
         await send({"type": "http.response.body", "body": html.encode()})
@@ -215,19 +226,17 @@ class OAuthRoutes:
             error=error,
         )
 
-    async def _consent_post(self, receive: Any, send: Any, browser_token: str | None) -> None:
+    async def _consent_post(self, scope: dict, receive: Any, send: Any) -> None:
         form = await _read_form(receive)
         pending = self.provider.load_request((form or {}).get("request", ""))
-        if pending is None:
+        # The cookie proves this browser loaded the consent page for this request.
+        # Checked before approve *and* deny: a forged POST may not cancel either.
+        if pending is None or not pending.same_browser(_cookie(scope, _consent_cookie(pending.request_id))):
             await _html_response(send, 400, message_page(*EXPIRED))
             return
         if form.get("decision") == "deny":
             self.provider.drop_request(pending.request_id)
             await _redirect(send, pending.redirect(error="access_denied"))
-            return
-        # The cookie proves this browser loaded the consent page for this request.
-        if not pending.same_browser(browser_token):
-            await _html_response(send, 400, message_page(*EXPIRED))
             return
         if form.get("consent") != "yes":
             await _html_response(send, 400, await self._consent_html(pending, "Tick the box to continue."))
@@ -246,7 +255,11 @@ class OAuthRoutes:
             await _redirect(send, pending.redirect(error="access_denied"))
             return
         try:
-            user_id, bundle = exchange_code(self.config, self.store, code=qs["code"], state=qs["state"])
+            # Three blocking Garmin calls: keep them off the event loop, which
+            # also has to acknowledge webhooks within Garmin's 30 s.
+            user_id, bundle = await anyio.to_thread.run_sync(
+                functools.partial(exchange_code, self.config, self.store, code=qs["code"], state=qs["state"])
+            )
         except Exception as exc:  # noqa: BLE001 - log the type only, never the message
             log.error("oauth callback failed: %s", type(exc).__name__)
             await _redirect(send, pending.redirect(error="server_error"))
@@ -303,15 +316,15 @@ def build_oauth_app(
     prefix = config.path_prefix
     provider = GarminAuthProvider(config.token_root, f"{config.public_base_url}{prefix}/consent", store)
 
-    def user_deleted(user_id: str) -> None:
+    inbox = WebhookInbox(config.token_root)
+
+    def user_deleted(user_id: str, garmin_user_id: str) -> None:
         provider.revoke_user(user_id)
+        inbox.scrub_garmin_user(garmin_user_id)
         if on_user_deleted is not None:
             on_user_deleted(user_id)
 
-    worker = WebhookWorker(
-        WebhookInbox(config.token_root),
-        NotificationProcessor(config, store, on_user_deleted=user_deleted),
-    )
+    worker = WebhookWorker(inbox, NotificationProcessor(config, store, on_user_deleted=user_deleted))
     worker.drain_on_start()
     webhook_paths = _webhook_paths(config)
     routes = OAuthRoutes(config, store, provider, worker)

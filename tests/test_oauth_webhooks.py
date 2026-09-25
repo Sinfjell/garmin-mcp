@@ -7,9 +7,11 @@ here, so the tests see exactly which Garmin endpoints were contacted.
 from __future__ import annotations
 
 import json
+import os
+import time
 
 import pytest
-from conftest import BOTH, USER_A, USER_B, bearer_for, register
+from conftest import BOTH, PING, PUSH, USER_A, USER_B, bearer_for, register
 from starlette.testclient import TestClient
 
 from garmin_mcp import server
@@ -20,7 +22,7 @@ from garmin_mcp.oauth.app import build_oauth_app
 from garmin_mcp.oauth.datastore import SummaryStore
 
 
-def _post(app, payload, path="/garmin-oauth/webhooks/push"):
+def _post(app, payload, path=PUSH):
     # No `with`: webhook routes need no lifespan, and the MCP session manager
     # may only be started once per app.
     response = TestClient(app).post(path, content=json.dumps(payload))
@@ -76,7 +78,7 @@ def test_ping_follows_callback_with_the_users_token(oauth_env, garmin):
     app = build_oauth_app(server.mcp, oauth_env)
 
     callback = "https://apis.garmin.com/wellness-api/rest/dailies?uploadStartTimeInSeconds=1&token=x"
-    _post(app, {"dailies": [{"userId": "garmin-a", "callbackURL": callback}]}, "/garmin-oauth/webhooks/ping")
+    _post(app, {"dailies": [{"userId": "garmin-a", "callbackURL": callback}]}, PING)
 
     assert len(garmin.requests) == 1
     assert garmin.requests[0].headers["Authorization"] == "Bearer access-garmin-a"
@@ -91,8 +93,9 @@ def test_ping_to_a_foreign_host_is_not_followed(oauth_env, garmin):
     _post(app, {"dailies": [{"userId": "garmin-a", "callbackURL": "https://evil.example/steal"}]})
 
     assert garmin.requests == []
-    # Kept for inspection, not silently dropped.
-    assert len(list((oauth_env.token_root / ".inbox" / "failed").glob("*.json"))) == 1
+    # Kept and retried, not silently dropped.
+    retries = list((oauth_env.token_root / ".inbox" / "retry").glob("1-*.json"))
+    assert len(retries) == 1
 
 
 def test_push_without_permission_is_not_stored(oauth_env, garmin):
@@ -110,7 +113,7 @@ def test_deregistration_deletes_user_once_garmin_rejects_tokens(oauth_env, garmi
     token = bearer_for(app, USER_A)
 
     garmin.user_id_status = 401
-    _post(app, {"deregistrations": [{"userId": "garmin-a"}]}, "/garmin-oauth/webhooks/ping")
+    _post(app, {"deregistrations": [{"userId": "garmin-a"}]}, PING)
 
     assert not (oauth_env.token_root / USER_A).exists()
     assert store.lookup_by_garmin_user_id("garmin-a") is None
@@ -150,24 +153,25 @@ def test_oversized_body_is_refused(oauth_env, garmin, monkeypatch):
     app = build_oauth_app(server.mcp, oauth_env)
     response = _post(app, {"dailies": [_daily("garmin-a")]})
     assert response.status_code == 413
-    assert list((oauth_env.token_root / ".inbox").iterdir()) == [oauth_env.token_root / ".inbox" / "failed"]
+    assert list((oauth_env.token_root / ".inbox").rglob("*.json")) == []
+    assert list((oauth_env.token_root / ".inbox").rglob("*.partial")) == []
 
 
-def test_webhook_secret_hides_the_bare_paths(oauth_env, garmin, monkeypatch):
-    secret = "s" * 40
-    monkeypatch.setenv("GARMIN_OAUTH_WEBHOOK_SECRET", secret)
-    config = oauth_config.load_oauth_config()
-    register(config, USER_A, "garmin-a")
-    app = build_oauth_app(server.mcp, config)
+def test_webhook_needs_the_secret_segment(oauth_env, garmin):
+    register(oauth_env, USER_A, "garmin-a")
+    app = build_oauth_app(server.mcp, oauth_env)
 
-    assert _post(app, {"dailies": [_daily("garmin-a")]}).status_code == 404
-    assert _post(app, {"dailies": [_daily("garmin-a")]}, f"/garmin-oauth/webhooks/{secret}/push").status_code == 200
-    assert len(SummaryStore(config.token_root / USER_A).by_date("dailies", "2026-09-20")) == 1
+    assert _post(app, {"dailies": [_daily("garmin-a")]}, "/garmin-oauth/webhooks/push").status_code == 404
+    assert _post(app, {"dailies": [_daily("garmin-a")]}, "/garmin-oauth/webhooks/" + "x" * 40 + "/push").status_code == 404
+    assert SummaryStore(oauth_env.token_root / USER_A).by_date("dailies", "2026-09-20") == []
+    assert _post(app, {"dailies": [_daily("garmin-a")]}).status_code == 200
+    assert len(SummaryStore(oauth_env.token_root / USER_A).by_date("dailies", "2026-09-20")) == 1
 
 
-def test_short_webhook_secret_is_rejected(oauth_env, monkeypatch):
-    monkeypatch.setenv("GARMIN_OAUTH_WEBHOOK_SECRET", "short")
-    with pytest.raises(RuntimeError, match="at least 32"):
+@pytest.mark.parametrize("value", ["", "short", "a/" + "b" * 40])
+def test_oauth_mode_refuses_to_start_without_a_proper_secret(oauth_env, monkeypatch, value):
+    monkeypatch.setenv("GARMIN_OAUTH_WEBHOOK_SECRET", value)
+    with pytest.raises(RuntimeError, match="GARMIN_OAUTH_WEBHOOK_SECRET"):
         oauth_config.load_oauth_config()
 
 
@@ -195,3 +199,139 @@ def test_initial_backfill_only_requests_permitted_types(oauth_env, garmin):
     params = garmin.requests[0].url.params
     span = int(params["summaryEndTimeInSeconds"]) - int(params["summaryStartTimeInSeconds"])
     assert span == webhooks.BACKFILL_DAYS * 24 * 60 * 60
+
+
+# --- Review round 1: transient failures, retention, forgery ---------------
+
+
+def _expired(store, user_id):
+    bundle = store.load_tokens(user_id)
+    bundle.expires_at = 0
+    store.save_tokens(user_id, bundle)
+
+
+@pytest.mark.parametrize("expired_access", [True, False])
+def test_deregistration_survives_a_token_endpoint_outage(oauth_env, garmin, expired_access):
+    """A 5xx from Garmin says nothing about the registration: nobody is deleted."""
+    store = register(oauth_env, USER_A, "garmin-a")
+    if expired_access:
+        _expired(store, USER_A)
+    else:
+        garmin.user_id_status = 401  # access token refused, then the refresh hits the outage
+    garmin.token_status = 503
+    app = build_oauth_app(server.mcp, oauth_env)
+
+    _post(app, {"deregistrations": [{"userId": "garmin-a"}]}, PING)
+
+    assert store.resolve_existing(USER_A) is not None
+    assert len(list((oauth_env.token_root / ".inbox" / "retry").glob("1-*.json"))) == 1
+
+
+def test_refused_refresh_token_counts_as_deregistered(oauth_env, garmin):
+    store = register(oauth_env, USER_A, "garmin-a")
+    _expired(store, USER_A)
+    garmin.token_status = 400  # invalid_grant: Garmin revoked the refresh token
+    app = build_oauth_app(server.mcp, oauth_env)
+    _post(app, {"deregistrations": [{"userId": "garmin-a"}]}, PING)
+    assert store.resolve_existing(USER_A) is None
+
+
+def test_failed_ping_is_retried_and_then_stored(oauth_env, garmin):
+    register(oauth_env, USER_A, "garmin-a")
+    garmin.callback_payload = [_daily("garmin-a", steps=999)]
+    garmin.callback_status = 503
+    app = build_oauth_app(server.mcp, oauth_env)
+    callback = "https://apis.garmin.com/wellness-api/rest/dailies?token=x"
+    _post(app, {"dailies": [{"userId": "garmin-a", "callbackURL": callback}]}, PING)
+
+    [retry] = (oauth_env.token_root / ".inbox" / "retry").glob("1-*.json")
+    garmin.callback_status = 200
+    app.webhook_worker.submit(retry)
+    app.webhook_worker.wait()
+
+    stored = SummaryStore(oauth_env.token_root / USER_A).by_date("dailies", "2026-09-20")
+    assert [d["steps"] for d in stored] == [999]
+    assert not retry.exists()
+
+
+def test_items_are_parked_after_the_last_retry(oauth_env, garmin):
+    register(oauth_env, USER_A, "garmin-a")
+    app = build_oauth_app(server.mcp, oauth_env)
+    last = len(webhooks.RETRY_DELAYS_SECONDS)
+    item = {"dailies": [{"userId": "garmin-a", "callbackURL": "https://evil.example/x"}]}
+    path = app.webhook_worker.inbox.write(app.webhook_worker.inbox.retry_dir, item, str(last))
+    app.webhook_worker.submit(path)
+    app.webhook_worker.wait()
+    assert len(list((oauth_env.token_root / ".inbox" / "failed").glob("*.json"))) == 1
+
+
+def test_parked_files_expire(oauth_env):
+    inbox = webhooks.WebhookInbox(oauth_env.token_root)
+    old = inbox.write(inbox.failed_dir, {"dailies": []}, "failed")
+    fresh = inbox.write(inbox.failed_dir, {"dailies": []}, "failed")
+    week_ago = time.time() - webhooks.FAILED_RETENTION_SECONDS - 60
+    os.utime(old, (week_ago, week_ago))
+    inbox.expire_failed()
+    assert not old.exists()
+    assert fresh.exists()
+
+
+def test_deregistration_scrubs_the_user_from_spooled_files(oauth_env, garmin):
+    register(oauth_env, USER_A, "garmin-a")
+    register(oauth_env, USER_B, "garmin-b")
+    app = build_oauth_app(server.mcp, oauth_env)
+    inbox = app.webhook_worker.inbox
+    parked = inbox.write(inbox.failed_dir, {"dailies": [_daily("garmin-a"), _daily("garmin-b")]}, "failed")
+    only_a = inbox.write(inbox.failed_dir, {"sleeps": [{"userId": "garmin-a"}]}, "failed")
+
+    garmin.user_id_status = 401
+    _post(app, {"deregistrations": [{"userId": "garmin-a"}]}, PING)
+
+    assert not only_a.exists()
+    left = json.loads(parked.read_text())
+    assert [i["userId"] for i in left["dailies"]] == ["garmin-b"]
+
+
+def test_unexpected_permissions_payload_purges_nothing(oauth_env, garmin):
+    store = register(oauth_env, USER_A, "garmin-a")
+    app = build_oauth_app(server.mcp, oauth_env)
+    _post(app, {"dailies": [_daily("garmin-a")]})
+
+    garmin.permissions = {"somethingElse": []}
+    _post(app, {"userPermissionsChange": [{"userId": "garmin-a"}]})
+
+    assert len(SummaryStore(oauth_env.token_root / USER_A).by_date("dailies", "2026-09-20")) == 1
+    assert store.load_tokens(USER_A).permissions == BOTH
+
+
+def test_unknown_permissions_store_nothing(oauth_env, garmin):
+    register(oauth_env, USER_A, "garmin-a", permissions=None)
+    app = build_oauth_app(server.mcp, oauth_env)
+    _post(app, {"dailies": [_daily("garmin-a")]})
+    assert SummaryStore(oauth_env.token_root / USER_A).by_date("dailies", "2026-09-20") == []
+
+
+def test_one_push_with_many_items_is_one_write_per_user(oauth_env, garmin, monkeypatch):
+    register(oauth_env, USER_A, "garmin-a")
+    calls = []
+    real_put = SummaryStore.put
+    monkeypatch.setattr(SummaryStore, "put", lambda self, t, s: calls.append(t) or real_put(self, t, s))
+    app = build_oauth_app(server.mcp, oauth_env)
+    _post(app, {"dailies": [_daily("garmin-a", day=f"2026-09-{d:02d}") for d in range(1, 21)]})
+    assert calls == ["dailies"]
+
+
+def test_disconnect_mid_upload_queues_nothing(oauth_env):
+    import anyio
+
+    from garmin_mcp.oauth.app import _spool_body
+
+    inbox = webhooks.WebhookInbox(oauth_env.token_root)
+    messages = iter([{"type": "http.request", "body": b'{"dailies":', "more_body": True}, {"type": "http.disconnect"}])
+
+    async def receive():
+        return next(messages)
+
+    assert anyio.run(_spool_body, receive, inbox) is None
+    assert list(inbox.dir.glob("*.json")) == []
+    assert list(inbox.dir.glob("*.partial")) == []

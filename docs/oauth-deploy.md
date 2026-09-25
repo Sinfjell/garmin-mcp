@@ -33,6 +33,7 @@ export GARMIN_OAUTH_PUBLIC_BASE_URL=https://mcp.productivitytech.io
 # export GARMIN_OAUTH_ALLOWED_HOSTS=www.productivitytech.io
 export GARMIN_OAUTH_TOKEN_ROOT=$HOME/.garmin-oauth-tokens   # EU-local disk
 export GARMIN_OAUTH_PATH_PREFIX=/garmin-oauth
+export GARMIN_OAUTH_WEBHOOK_SECRET=...     # required; python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
 Token layout (EU storage assumption — host filesystem in the EU, no US-only deps):
@@ -69,6 +70,7 @@ Environment=GARMIN_OAUTH_PUBLIC_BASE_URL=https://mcp.productivitytech.io
 # Optional: Environment=GARMIN_OAUTH_ALLOWED_HOSTS=www.productivitytech.io
 Environment=GARMIN_OAUTH_TOKEN_ROOT=/var/www/vhosts/productivitytech.io/.garmin-oauth-tokens
 Environment=GARMIN_OAUTH_PATH_PREFIX=/garmin-oauth
+Environment=GARMIN_OAUTH_WEBHOOK_SECRET=...
 # uvx caches builds: use --refresh when deploying a new git revision
 ExecStart=/usr/local/bin/uvx --refresh --from git+https://github.com/Sinfjell/garmin-mcp@main \
   garmin-mcp --transport streamable-http --host 127.0.0.1 --port 8771 --path /garmin-oauth
@@ -105,6 +107,16 @@ location /garmin-oauth/ {
     proxy_buffering off;
 }
 
+# The webhook paths carry GARMIN_OAUTH_WEBHOOK_SECRET: keep them out of the
+# access log (the app itself runs uvicorn with access_log=False).
+location /garmin-oauth/webhooks/ {
+    access_log off;
+    proxy_pass http://127.0.0.1:8771;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    client_max_body_size 128m;
+}
+
 # MCP clients discover the authorization server from these two documents
 # (RFC 9728 and RFC 8414). They live outside /garmin-oauth/ by specification.
 location = /.well-known/oauth-protected-resource/garmin-oauth/mcp {
@@ -134,9 +146,10 @@ the allowlist did not include the Host nginx forwarded — check
 
 ## Portal URLs to register
 
-On the evaluation app «Garmin MCP». With `GARMIN_OAUTH_WEBHOOK_SECRET` set
-(recommended — Garmin does not sign notifications), the webhook URLs carry the
-secret as a path segment:
+On the evaluation app «Garmin MCP». `GARMIN_OAUTH_WEBHOOK_SECRET` is required
+in oauth mode (≥ 32 characters, no `/`; the process refuses to start without
+it) — Garmin does not sign notifications, so the secret path segment is what
+authenticates them:
 
 | Purpose | URL |
 |---|---|
@@ -162,8 +175,11 @@ same. Do not paste the secret into chat or tickets.
    `GET /user/id`. A 200 there means the notification is ignored.
 5. **Permission change**: permissions are re-read from Garmin; data behind a
    withdrawn `ACTIVITY_EXPORT` / `HEALTH_EXPORT` is purged.
-6. A file with any failed item moves to `.inbox/failed/`. All writes are
-   idempotent, so replaying one (move it back to `.inbox/`, restart) is safe.
+6. Items that fail (Garmin 5xx, timeouts) are written to `.inbox/retry/` and
+   retried after 1 min, 10 min and 1 h — also across a restart. After the last
+   retry they are parked in `.inbox/failed/` and deleted after 7 days. All writes
+   are idempotent, so replaying a parked file (move it to `.inbox/`, restart) is safe.
+7. Deregistration also removes the user's items from every spooled file.
 
 After consent the server requests 30 days of backfill for activities, dailies,
 sleeps, stressDetails, hrv and userMetrics; the data then arrives as ordinary
@@ -194,6 +210,15 @@ with the same Garmin account reuses the same stored data.
 MCP auth state (registered clients, pending requests, SHA-256 hashes of codes and
 tokens) lives in `$TOKEN_ROOT/.mcp-auth.sqlite3`. Deregistration revokes all of a
 user's MCP tokens along with their data.
+
+Lifetimes: access token 1 h, refresh token 90 days (rotated on every use, the old
+pair dies), authorization code 5 min, parked authorization request 15 min.
+Dynamic client registration is open, as the MCP spec expects: any client can
+register, but every sign-in passes our consent page (which names the client and
+the host it returns to) and Garmin's. The consent form only accepts a POST from
+the browser that loaded it (per-request cookie), for approve and cancel alike.
+Consent fails — and no user is created — if Garmin's user ID or permissions
+cannot be read after the token exchange.
 
 ## Smoke checklist (human)
 

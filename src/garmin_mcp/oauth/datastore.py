@@ -103,13 +103,16 @@ class SummaryStore:
 
     def __init__(self, user_dir: Path):
         self.path = Path(user_dir) / _DB_FILENAME
+        self._schema_ready = False
 
     def _connect(self) -> sqlite3.Connection:
         new = not self.path.exists()
         conn = sqlite3.connect(self.path, timeout=30)
         if new:
             os.chmod(self.path, 0o600)
-        conn.executescript(_SCHEMA)
+        if new or not self._schema_ready:
+            conn.executescript(_SCHEMA)
+            self._schema_ready = True
         return conn
 
     def put(self, summary_type: str, summaries: Iterable[dict], *, now: float | None = None) -> int:

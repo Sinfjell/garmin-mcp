@@ -28,6 +28,7 @@ def oauth_env(monkeypatch, tmp_path):
     monkeypatch.setenv("GARMIN_OAUTH_PUBLIC_BASE_URL", "https://example.test")
     monkeypatch.setenv("GARMIN_OAUTH_TOKEN_ROOT", str(tmp_path / "tokens"))
     monkeypatch.setenv("GARMIN_OAUTH_PATH_PREFIX", "/garmin-oauth")
+    monkeypatch.setenv("GARMIN_OAUTH_WEBHOOK_SECRET", "w" * 40)
     return oauth_config.load_oauth_config()
 
 
@@ -403,14 +404,17 @@ def test_oauth_webhook_ack_and_old_per_user_urls_gone(oauth_env):
     app = build_oauth_app(server.mcp, oauth_env)
     client = TestClient(app)
 
-    ping = client.post("/garmin-oauth/webhooks/ping", json={"dailies": []})
+    ping = client.post(f"/garmin-oauth/webhooks/{'w' * 40}/ping", json={"dailies": []})
     assert ping.status_code == 200
     assert ping.json()["status"] == "accepted"
     app.webhook_worker.wait()
 
-    push = client.post("/garmin-oauth/webhooks/push", json={"activities": []})
+    push = client.post(f"/garmin-oauth/webhooks/{'w' * 40}/push", json={"activities": []})
     assert push.status_code == 200
     app.webhook_worker.wait()
+
+    # Without the secret segment there is no webhook.
+    assert client.post("/garmin-oauth/webhooks/push", json={"activities": []}).status_code == 404
 
     # Per-user secret URLs were replaced by one bearer-protected endpoint.
     assert client.get("/garmin-oauth/" + ("z" * 40) + "/mcp").status_code == 404
@@ -447,3 +451,22 @@ def test_exchange_fails_without_garmin_user_id(oauth_env):
     with pytest.raises(OAuthError, match="user ID"):
         exchange_code(oauth_env, store, code="c", state=pair.state, http=http)
     assert [p for p in oauth_env.token_root.iterdir() if not p.name.startswith(".")] == []
+
+
+def test_exchange_fails_without_permissions(oauth_env):
+    """Unknown permissions would mean guessing allow-all or allow-none; consent fails instead."""
+    from garmin_mcp.oauth.errors import OAuthError
+
+    store = TokenStore(oauth_env.token_root)
+    _url, pair = build_authorization_url(oauth_env, store)
+    http = MagicMock()
+    token_response = MagicMock(status_code=200)
+    token_response.json.return_value = {"access_token": "a", "refresh_token": "r", "expires_in": 3600}
+    http.post.return_value = token_response
+    user_response = MagicMock(status_code=200)
+    user_response.json.return_value = {"userId": "garmin-abc"}
+    http.get.side_effect = [user_response, MagicMock(status_code=500)]
+
+    with pytest.raises(OAuthError, match="permissions"):
+        exchange_code(oauth_env, store, code="c", state=pair.state, http=http)
+    assert store.lookup_by_garmin_user_id("garmin-abc") is None

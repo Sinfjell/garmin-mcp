@@ -1048,7 +1048,8 @@ def _run_oauth(host: str, port: int, path_prefix: str | None) -> None:
         prefix = path_prefix if path_prefix.startswith("/") else f"/{path_prefix}"
         config = replace(config, path_prefix="/" + prefix.strip("/"))
     app = build_oauth_app(mcp, config, on_user_deleted=lambda uid: _evict_oauth_client(config.token_root / uid))
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    # No access log: the webhook URLs carry GARMIN_OAUTH_WEBHOOK_SECRET in the path.
+    uvicorn.run(app, host=host, port=port, log_level="info", access_log=False)
 
 
 def _evict_oauth_client(token_dir: Path) -> None:
