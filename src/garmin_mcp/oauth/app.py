@@ -25,7 +25,7 @@ def _apply_oauth_transport_security(mcp: Any, config: OAuthConfig) -> None:
     """Widen FastMCP DNS-rebinding Host allowlist for the public reverse-proxy Host.
 
     Binding to 127.0.0.1 makes FastMCP auto-allow only localhost Host headers.
-    Nginx forwards ``Host: productivitytech.io``, which then returns 421 unless
+    Nginx forwards ``Host: mcp.productivitytech.io``, which then returns 421 unless
     the public hostname (from ``GARMIN_OAUTH_PUBLIC_BASE_URL`` / optional
     ``GARMIN_OAUTH_ALLOWED_HOSTS``) is listed. Protection stays enabled — only
     the allowlist grows. Localhost patterns remain so direct bind curls work.

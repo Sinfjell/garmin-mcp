@@ -3,7 +3,7 @@
 Additive path for a **new** smoke-test / prod-candidate instance using OAuth
 2.0 PKCE + Health/Activity APIs. Does **not** replace or migrate the unofficial
 session-auth services (`garmin-mcp.service`, multi-tenant, onboarding) on
-Hetzner / productivitytech.io.
+Hetzner / mcp.productivitytech.io.
 
 Garmin ticket 224965: use case OK in principle if the Privacy Policy outlines
 Garmin data + third-party AI. Training status / lactate threshold / personal
@@ -24,8 +24,8 @@ See `.env.example`. Minimum for oauth mode:
 export GARMIN_AUTH_MODE=oauth
 export GARMIN_OAUTH_CLIENT_ID=...          # from Garmin portal / 1Password
 export GARMIN_OAUTH_CLIENT_SECRET=...
-export GARMIN_OAUTH_REDIRECT_URI=https://productivitytech.io/garmin-oauth/callback
-export GARMIN_OAUTH_PUBLIC_BASE_URL=https://productivitytech.io
+export GARMIN_OAUTH_REDIRECT_URI=https://mcp.productivitytech.io/garmin-oauth/callback
+export GARMIN_OAUTH_PUBLIC_BASE_URL=https://mcp.productivitytech.io
 # Optional: extra Host headers for MCP DNS-rebinding allowlist (www, etc.).
 # PUBLIC_BASE_URL's hostname is always included; localhost stays allowed for
 # direct curls to the bind. Prefer this app-side allowlist over rewriting Host
@@ -64,8 +64,8 @@ WorkingDirectory=/var/www/vhosts/productivitytech.io
 Environment=GARMIN_AUTH_MODE=oauth
 Environment=GARMIN_OAUTH_CLIENT_ID=...
 Environment=GARMIN_OAUTH_CLIENT_SECRET=...
-Environment=GARMIN_OAUTH_REDIRECT_URI=https://productivitytech.io/garmin-oauth/callback
-Environment=GARMIN_OAUTH_PUBLIC_BASE_URL=https://productivitytech.io
+Environment=GARMIN_OAUTH_REDIRECT_URI=https://mcp.productivitytech.io/garmin-oauth/callback
+Environment=GARMIN_OAUTH_PUBLIC_BASE_URL=https://mcp.productivitytech.io
 # Optional: Environment=GARMIN_OAUTH_ALLOWED_HOSTS=www.productivitytech.io
 Environment=GARMIN_OAUTH_TOKEN_ROOT=/var/www/vhosts/productivitytech.io/.garmin-oauth-tokens
 Environment=GARMIN_OAUTH_PATH_PREFIX=/garmin-oauth
@@ -122,7 +122,7 @@ curl -sS -o /tmp/mcp-out -w '%{http_code}\n' \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}' \
-  https://productivitytech.io/garmin-oauth/<user-id>/mcp
+  https://mcp.productivitytech.io/garmin-oauth/<user-id>/mcp
 ```
 
 A `421` body of `Invalid Host header` means the allowlist did not include the
@@ -135,9 +135,9 @@ On the evaluation app «Garmin MCP»:
 
 | Purpose | URL |
 |---|---|
-| OAuth redirect | `https://productivitytech.io/garmin-oauth/callback` |
-| Ping webhook | `https://productivitytech.io/garmin-oauth/webhooks/ping` |
-| Push webhook | `https://productivitytech.io/garmin-oauth/webhooks/push` |
+| OAuth redirect | `https://mcp.productivitytech.io/garmin-oauth/callback` |
+| Ping webhook | `https://mcp.productivitytech.io/garmin-oauth/webhooks/ping` |
+| Push webhook | `https://mcp.productivitytech.io/garmin-oauth/webhooks/push` |
 
 Ping/Push handlers currently **acknowledge with HTTP 200** and do not ingest
 payloads (documented stubs for the eval program). Pull is used for smoke tests.
@@ -157,7 +157,7 @@ payloads (documented stubs for the eval program). Pull is used for smoke tests.
 1. Create/confirm eval app redirect URI + Ping/Push URLs in the Garmin portal.
 2. Set the env vars above on the host (secrets from 1Password — never git).
 3. Start the **new** unit on port 8770; confirm existing units unchanged.
-4. Open `https://productivitytech.io/garmin-oauth/authorize`, complete consent.
+4. Open `https://mcp.productivitytech.io/garmin-oauth/authorize`, complete consent.
 5. Copy the printed MCP URL (`.../garmin-oauth/<user-id>/mcp`).
 6. `initialize` against that URL; call `get_daily_stats` and `list_recent_activities`.
 7. Confirm `get_training_status` / `get_personal_records` / `get_performance_metrics`

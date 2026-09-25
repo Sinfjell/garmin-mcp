@@ -82,7 +82,7 @@ def _hostname_from_public_base(public_base_url: str) -> str:
     if not host:
         raise RuntimeError(
             f"{PUBLIC_BASE_URL_ENV} must include a hostname "
-            f"(e.g. https://productivitytech.io), got {public_base_url!r}"
+            f"(e.g. https://mcp.productivitytech.io), got {public_base_url!r}"
         )
     return host
 
@@ -144,7 +144,7 @@ def load_oauth_config() -> OAuthConfig:
     public_base = (os.environ.get(PUBLIC_BASE_URL_ENV) or "").strip().rstrip("/")
     if not public_base:
         raise RuntimeError(
-            f"OAuth mode requires {PUBLIC_BASE_URL_ENV} (e.g. https://productivitytech.io) "
+            f"OAuth mode requires {PUBLIC_BASE_URL_ENV} (e.g. https://mcp.productivitytech.io) "
             "so post-consent connector URLs can be built."
         )
 

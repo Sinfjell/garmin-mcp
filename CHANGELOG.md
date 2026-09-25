@@ -6,6 +6,10 @@ All notable changes to this project are documented here. Format follows
 
 ## [Unreleased]
 
+### Changed
+- Docs and `.env.example` point hosted endpoints at `mcp.productivitytech.io`;
+  productivitytech.io itself moves to Vercel and no longer serves MCP routes.
+
 ### Fixed
 - OAuth streamable-http no longer returns **421 Invalid Host** when nginx
   forwards `Host: productivitytech.io` (or whatever
