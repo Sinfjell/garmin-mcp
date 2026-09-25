@@ -417,9 +417,10 @@ def test_oauth_http_authorize_and_webhook_stubs(oauth_env):
 
 def test_oauth_app_allows_public_host_from_base_url(oauth_env):
     """DNS-rebinding guard must accept Host from GARMIN_OAUTH_PUBLIC_BASE_URL."""
-    from garmin_mcp.oauth.app import apply_transport_host_allowlist, build_oauth_app
+    from garmin_mcp.oauth.app import build_oauth_app
 
-    apply_transport_host_allowlist(server.mcp, oauth_env.public_base_url)
+    # build_oauth_app must apply the allowlist before mounting MCP.
+    build_oauth_app(server.mcp, oauth_env)
     ts = server.mcp.settings.transport_security
     assert ts is not None
     assert ts.enable_dns_rebinding_protection is True
@@ -428,8 +429,3 @@ def test_oauth_app_allows_public_host_from_base_url(oauth_env):
     assert "https://example.test" in ts.allowed_origins
     # Localhost still allowed so bind-address smoke tests keep working.
     assert any(h.startswith("127.0.0.1") for h in ts.allowed_hosts)
-
-    # build_oauth_app must apply the same allowlist before mounting MCP.
-    build_oauth_app(server.mcp, oauth_env)
-    ts2 = server.mcp.settings.transport_security
-    assert "example.test" in ts2.allowed_hosts
