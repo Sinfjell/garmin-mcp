@@ -122,14 +122,30 @@ def test_deregistration_deletes_user_once_garmin_rejects_tokens(oauth_env, garmi
     assert TestClient(app).post("/garmin-oauth/mcp", json={}, headers={"Authorization": token}).status_code == 401
 
 
-def test_forged_deregistration_is_ignored(oauth_env, garmin):
+def test_unconfirmed_deregistration_is_retried_then_parked(oauth_env, garmin):
+    """Garmin still honours the token: maybe forged, maybe early. Retry, but not forever."""
     store = register(oauth_env, USER_A, "garmin-a")
     app = build_oauth_app(server.mcp, oauth_env)
+    inbox = app.webhook_worker.inbox
 
-    garmin.user_id_status = 200  # Garmin still honours the tokens
+    garmin.user_id_status = 200
     _post(app, {"deregistrations": [{"userId": "garmin-a"}]})
-
     assert store.resolve_existing(USER_A) is not None
+    [retry] = inbox.retry_dir.glob("1-*.json")
+    assert list(json.loads(retry.read_text())) == ["deregistrationsUnconfirmed"]
+
+    last = inbox.write(inbox.retry_dir, json.loads(retry.read_text()), str(len(webhooks.RETRY_DELAYS_SECONDS)))
+    app.webhook_worker.submit(last)
+    app.webhook_worker.wait()
+    assert store.resolve_existing(USER_A) is not None
+    assert len(list(inbox.failed_dir.glob("*.json"))) == 1
+
+    # Garmin revokes the token later: a replay of the parked file now deletes.
+    garmin.user_id_status = 401
+    [parked] = inbox.failed_dir.glob("*.json")
+    app.webhook_worker.submit(parked.replace(inbox.dir / parked.name))
+    app.webhook_worker.wait()
+    assert store.resolve_existing(USER_A) is None
 
 
 def test_permission_change_uses_garmins_answer_and_purges_withdrawn_data(oauth_env, garmin):
@@ -390,3 +406,44 @@ def test_deregistration_is_never_parked(oauth_env, garmin):
     app.webhook_worker.submit(retry)
     app.webhook_worker.wait()
     assert store.resolve_existing(USER_A) is None
+
+
+def test_invalid_client_on_refresh_never_deletes(oauth_env, garmin):
+    """A rotated or wrong client secret is our problem, not a deregistration."""
+    store = register(oauth_env, USER_A, "garmin-a")
+    _expired(store, USER_A)
+    garmin.token_status = 401
+    garmin.token_error = "invalid_client"
+    app = build_oauth_app(server.mcp, oauth_env)
+    _post(app, {"deregistrations": [{"userId": "garmin-a"}]}, PING)
+    assert store.resolve_existing(USER_A) is not None
+
+
+def test_deregistration_skips_a_user_who_reconnected_meanwhile(oauth_env):
+    store = register(oauth_env, USER_A, "garmin-a")
+
+    class Reconnecting:
+        data = None
+
+        def registration_active(self):
+            bundle = store.load_tokens(USER_A)
+            bundle.connected_at = time.time()  # the callback saved a fresh consent
+            store.save_tokens(USER_A, bundle)
+            return False
+
+        def close(self):
+            pass
+
+    processor = webhooks.NotificationProcessor(oauth_env, store, client_factory=lambda uid: Reconnecting())
+    assert processor.process({"deregistrations": [{"userId": "garmin-a"}]}) == {}
+    assert store.resolve_existing(USER_A) is not None
+
+
+def test_retry_whose_file_was_scrubbed_is_a_no_op(oauth_env, caplog):
+    app = build_oauth_app(server.mcp, oauth_env)
+    inbox = app.webhook_worker.inbox
+    ghost = inbox.retry_dir / "1-gone.json"
+    app.webhook_worker.submit(ghost)
+    app.webhook_worker.wait()
+    assert list(inbox.failed_dir.glob("*")) == []
+    assert "failed" not in caplog.text

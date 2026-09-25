@@ -127,12 +127,14 @@ class OfficialGarminClient:
         """
         try:
             self._request("GET", self._wellness("user/id"))
-        except (TokenExchangeError, GarminApiError) as exc:
-            # 400/401 from the token endpoint is a refused refresh token; 401/403
-            # from the API is a refused access token. Anything else (429, 5xx)
-            # says nothing about the registration and must not delete anyone.
-            refused = (400, 401) if isinstance(exc, TokenExchangeError) else (401, 403)
-            if exc.status_code in refused:
+        except TokenExchangeError as exc:
+            # Only a refused grant counts; invalid_client (our own misconfigured
+            # secret) or a Garmin outage must never delete a user.
+            if exc.grant_refused:
+                return False
+            raise
+        except GarminApiError as exc:
+            if exc.status_code in (401, 403):
                 return False
             raise
         return True

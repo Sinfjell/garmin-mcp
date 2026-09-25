@@ -291,3 +291,33 @@ def test_authorization_codes_are_not_stored_in_plaintext(app, oauth_env):
     raw = (oauth_env.token_root / ".mcp-auth.sqlite3").read_bytes()
     assert tokens["access_token"].encode() not in raw
     assert tokens["refresh_token"].encode() not in raw
+
+
+def test_refresh_that_repeats_the_scope_keeps_working(app):
+    """Clients often resend `scope` on refresh; the stored grant must still match it."""
+    with TestClient(app, base_url=BASE) as http:
+        r = http.post("/garmin-oauth/register", json={
+            "client_name": "Claude", "redirect_uris": [REDIRECT], "scope": "garmin",
+            "grant_types": ["authorization_code", "refresh_token"], "response_types": ["code"],
+            "token_endpoint_auth_method": "none",
+        })
+        client_id = r.json()["client_id"]
+        verifier, challenge = _pkce()
+        consent = http.get("/garmin-oauth/authorize", params={
+            "response_type": "code", "client_id": client_id, "redirect_uri": REDIRECT, "scope": "garmin",
+            "code_challenge": challenge, "code_challenge_method": "S256", "state": "client-state",
+        }, follow_redirects=False).headers["location"]
+        garmin_state = parse_qs(urlparse(_approve(http, consent)).query)["state"][0]
+        back = http.get("/garmin-oauth/callback", params={"code": "g", "state": garmin_state}, follow_redirects=False)
+        code = parse_qs(urlparse(back.headers["location"]).query)["code"][0]
+        tokens = http.post("/garmin-oauth/token", data={
+            "grant_type": "authorization_code", "code": code, "redirect_uri": REDIRECT,
+            "client_id": client_id, "code_verifier": verifier,
+        }).json()
+        assert tokens["scope"] == "garmin"
+        refreshed = http.post("/garmin-oauth/token", data={
+            "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"],
+            "client_id": client_id, "scope": "garmin",
+        })
+        assert refreshed.status_code == 200, refreshed.text
+        assert refreshed.json()["scope"] == "garmin"

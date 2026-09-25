@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS codes (
 );
 CREATE TABLE IF NOT EXISTS tokens (
     token_hash TEXT PRIMARY KEY, kind TEXT NOT NULL, client_id TEXT NOT NULL,
-    user_id TEXT NOT NULL, grant_id TEXT NOT NULL, expires_at REAL NOT NULL
+    user_id TEXT NOT NULL, grant_id TEXT NOT NULL, expires_at REAL NOT NULL, scopes TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS tokens_by_user ON tokens (user_id);
 CREATE INDEX IF NOT EXISTS tokens_by_grant ON tokens (grant_id);
@@ -224,12 +224,13 @@ class GarminAuthProvider:
         access, refresh = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         grant_id = grant_id or secrets.token_hex(16)
         now = time.time()
+        scope_text = " ".join(scopes)
         with closing(self._connect()) as conn, conn:
             conn.executemany(
-                "INSERT INTO tokens VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO tokens VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
-                    (_hash(access), "access", client_id, user_id, grant_id, now + ACCESS_TOKEN_TTL),
-                    (_hash(refresh), "refresh", client_id, user_id, grant_id, now + REFRESH_TOKEN_TTL),
+                    (_hash(access), "access", client_id, user_id, grant_id, now + ACCESS_TOKEN_TTL, scope_text),
+                    (_hash(refresh), "refresh", client_id, user_id, grant_id, now + REFRESH_TOKEN_TTL, scope_text),
                 ],
             )
         return OAuthToken(
@@ -240,10 +241,11 @@ class GarminAuthProvider:
             scope=" ".join(scopes) or None,
         )
 
-    def _token_row(self, token: str, kind: str) -> tuple[str, str, str, float] | None:
+    def _token_row(self, token: str, kind: str) -> tuple[str, str, str, float, str] | None:
         with closing(self._connect()) as conn:
             row = conn.execute(
-                "SELECT client_id, user_id, grant_id, expires_at FROM tokens WHERE token_hash = ? AND kind = ?",
+                "SELECT client_id, user_id, grant_id, expires_at, scopes FROM tokens "
+                "WHERE token_hash = ? AND kind = ?",
                 (_hash(token), kind),
             ).fetchone()
         if row is None or row[3] < time.time():
@@ -254,28 +256,44 @@ class GarminAuthProvider:
         return row
 
     async def load_access_token(self, token: str) -> AccessToken | None:
+        return self.lookup_access_token(token)
+
+    def lookup_access_token(self, token: str) -> AccessToken | None:
+        """Synchronous form, for callers that run it in a worker thread."""
         row = self._token_row(token, "access")
         if row is None:
             return None
-        return AccessToken(token=token, client_id=row[0], scopes=[], expires_at=int(row[3]), subject=row[1])
+        return AccessToken(
+            token=token, client_id=row[0], scopes=row[4].split(), expires_at=int(row[3]), subject=row[1]
+        )
 
     async def load_refresh_token(self, client: OAuthClientInformationFull, refresh_token: str) -> RefreshToken | None:
         row = self._token_row(refresh_token, "refresh")
         if row is None or row[0] != client.client_id:
             return None
         return RefreshToken(
-            token=refresh_token, client_id=row[0], scopes=[], expires_at=int(row[3]), subject=row[1]
+            token=refresh_token, client_id=row[0], scopes=row[4].split(), expires_at=int(row[3]), subject=row[1]
         )
 
     async def exchange_refresh_token(
         self, client: OAuthClientInformationFull, refresh_token: RefreshToken, scopes: list[str]
     ) -> OAuthToken:
-        """Rotate: the old refresh token and its grant's access tokens stop working."""
+        """Rotate: the old refresh token and its grant's access tokens stop working.
+
+        Claiming the refresh token is one DELETE, so two concurrent refreshes
+        with the same token cannot both succeed.
+        """
         row = self._token_row(refresh_token.token, "refresh")
         if row is None:
             raise TokenError("invalid_grant", "refresh token is not valid")
-        self._revoke_grant(row[2])
-        return self._issue_tokens(client.client_id, row[1], scopes)
+        with closing(self._connect()) as conn, conn:
+            claimed = conn.execute(
+                "DELETE FROM tokens WHERE token_hash = ? AND kind = 'refresh'", (_hash(refresh_token.token),)
+            ).rowcount
+            conn.execute("DELETE FROM tokens WHERE grant_id = ?", (row[2],))
+        if not claimed:
+            raise TokenError("invalid_grant", "refresh token already used")
+        return self._issue_tokens(client.client_id, row[1], scopes or row[4].split())
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
         with closing(self._connect()) as conn:

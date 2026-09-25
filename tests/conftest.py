@@ -31,6 +31,7 @@ class FakeGarmin:
         self.callback_payload: list[dict] = []
         self.user_id_status = 200
         self.token_status = 200
+        self.token_error = "server_error"
         self.callback_status = 200
         self.permissions = BOTH
         self.garmin_user_id = "garmin-new"
@@ -50,7 +51,7 @@ class FakeGarmin:
         if path.endswith("/oauth/token"):
             self.token_forms.append(dict(httpx.QueryParams(request.content.decode())))
             if self.token_status != 200:
-                return httpx.Response(self.token_status)
+                return httpx.Response(self.token_status, json={"error": self.token_error})
             return httpx.Response(200, json={
                 "access_token": f"garmin-access-{len(self.token_forms)}",
                 "refresh_token": "garmin-refresh",

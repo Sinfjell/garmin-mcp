@@ -63,6 +63,13 @@ ClientFactory = Callable[[str], OfficialGarminClient]
 RETRY_DELAYS_SECONDS = (60, 10 * 60, 60 * 60)
 # Items that must eventually be applied, however long Garmin is unavailable.
 _NEVER_PARK = frozenset({"deregistrations", "userPermissionsChange"})
+# Deregistrations Garmin has not confirmed yet (its token still works). Retried
+# on the normal schedule, then parked: a forged one must not retry forever.
+_UNCONFIRMED = "deregistrationsUnconfirmed"
+
+
+class DeregistrationUnconfirmedError(Exception):
+    """Garmin still honours the user's tokens; the deregistration is not applied yet."""
 # Parked files hold raw health data for several users; they are not kept for long.
 FAILED_RETENTION_SECONDS = 7 * 24 * 60 * 60
 
@@ -107,10 +114,13 @@ class WebhookInbox:
                 p.unlink(missing_ok=True)
 
     def write(self, directory: Path, payload: dict, prefix: str) -> Path:
+        """Write atomically: a crash leaves either the whole file or none."""
         self.ensure()
         path = directory / f"{prefix}-{time.time_ns()}-{secrets.token_hex(4)}.json"
-        path.write_text(json.dumps(payload), encoding="utf-8")
-        os.chmod(path, 0o600)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        tmp.replace(path)
         return path
 
     def expire_failed(self, *, now: float | None = None) -> None:
@@ -180,7 +190,7 @@ class NotificationProcessor:
         for key, items in payload.items():
             if not isinstance(items, list):
                 continue
-            if key == "deregistrations":
+            if key in ("deregistrations", _UNCONFIRMED):
                 groups = [[i] for i in items]
                 handler: Callable[[list], None] = self._deregister
             elif key == "userPermissionsChange":
@@ -194,6 +204,8 @@ class NotificationProcessor:
             for group in groups:
                 try:
                     handler(group)
+                except DeregistrationUnconfirmedError:
+                    failed.setdefault(_UNCONFIRMED, []).extend(group)
                 except Exception as exc:  # noqa: BLE001 - log the type only
                     log.error("webhook items failed in %s: %s", key, type(exc).__name__)
                     failed.setdefault(key, []).extend(group)
@@ -215,8 +227,13 @@ class NotificationProcessor:
         user_id = self._local_user(group[0])
         if user_id is None:
             return
+        connected_at = self._tokens.load_tokens(user_id).connected_at
         if self._with_client(user_id, lambda c: c.registration_active()):
-            log.warning("deregistration ignored: Garmin still accepts the user's tokens")
+            # Real deregistrations can arrive before Garmin revokes the token:
+            # retry on the normal schedule, then give up (forged ones end there).
+            raise DeregistrationUnconfirmedError
+        if self._tokens.load_tokens(user_id).connected_at != connected_at:
+            log.warning("deregistration skipped: the user reconnected meanwhile")
             return
         self._tokens.delete_user(user_id)
         if self._on_user_deleted is not None:
@@ -282,6 +299,8 @@ class WebhookWorker:
         self._pool.submit(_log_failures, functools.partial(self._run_file, path))
 
     def _run_file(self, path: Path) -> None:
+        if not path.exists():  # scrubbed by a deregistration while its retry timer waited
+            return
         attempt = _attempt_of(path)
         try:
             payload = json.loads(path.read_bytes())
@@ -290,9 +309,11 @@ class WebhookWorker:
             log.error("webhook file unreadable: %s", type(exc).__name__)
             path.replace(self.inbox.failed_dir / path.name)
             return
-        path.unlink(missing_ok=True)
+        # Write the retry before removing the original, so a crash in between
+        # at worst replays idempotent writes instead of losing a deregistration.
         if failed:
             self._retry_later(failed, attempt)
+        path.unlink(missing_ok=True)
 
     def _retry_later(self, failed: dict[str, list], attempt: int) -> None:
         """Retry failed items; park summaries after the last retry.

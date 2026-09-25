@@ -12,10 +12,19 @@ class StateMismatchError(OAuthError):
 class TokenExchangeError(OAuthError):
     """Token endpoint returned a non-success status."""
 
-    def __init__(self, status_code: int):
-        # Do not embed the response body: it can echo form fields.
+    def __init__(self, status_code: int, error_code: str | None = None):
+        # Do not embed the response body: it can echo form fields. Only the
+        # RFC 6749 error code (e.g. "invalid_grant") is kept.
         super().__init__(f"token endpoint returned HTTP {status_code}")
         self.status_code = status_code
+        self.error_code = error_code
+
+    @property
+    def grant_refused(self) -> bool:
+        """Garmin refused the grant itself (revoked/expired), not our client credentials."""
+        if self.error_code == "invalid_grant":
+            return True
+        return self.status_code == 400 and self.error_code not in ("invalid_client", "unauthorized_client")
 
 
 class OfficialApiUnavailableError(Exception):

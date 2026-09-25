@@ -214,7 +214,8 @@ tokens) lives in `$TOKEN_ROOT/.mcp-auth.sqlite3`. Deregistration revokes all of 
 user's MCP tokens along with their data.
 
 Lifetimes: access token 1 h, refresh token 90 days (rotated on every use, the old
-pair dies), authorization code 5 min, parked authorization request 15 min.
+pair dies; a refresh token can be claimed once even under concurrent requests;
+granted scopes carry over), authorization code 5 min, parked authorization request 15 min.
 Dynamic client registration is open, as the MCP spec expects: any client can
 register, but every sign-in passes our consent page (which names the client and
 the host it returns to) and Garmin's. The consent form only accepts a POST from

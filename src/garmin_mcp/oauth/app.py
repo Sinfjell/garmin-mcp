@@ -123,7 +123,8 @@ async def _spool_body(receive: Any, inbox: WebhookInbox) -> Path | None:
                 fh.close()
                 partial.unlink(missing_ok=True)
                 return None
-            fh.write(chunk)
+            # Off the event loop: a 100 MB Push must not delay other acknowledgements.
+            await anyio.to_thread.run_sync(fh.write, chunk)
             if not message.get("more_body"):
                 break
     return inbox.commit(partial)
@@ -304,6 +305,30 @@ def _resource_url(config: OAuthConfig) -> str:
     return f"{config.public_base_url}{config.path_prefix}/mcp"
 
 
+def _start_worker(config: OAuthConfig, store: TokenStore, provider: GarminAuthProvider,
+                  on_user_deleted: Callable[[str], None] | None) -> WebhookWorker:
+    inbox = WebhookInbox(config.token_root)
+
+    def user_deleted(user_id: str, garmin_user_id: str) -> None:
+        provider.revoke_user(user_id)
+        inbox.scrub_garmin_user(garmin_user_id)
+        if on_user_deleted is not None:
+            on_user_deleted(user_id)
+
+    worker = WebhookWorker(inbox, NotificationProcessor(config, store, on_user_deleted=user_deleted))
+    worker.drain_on_start()
+    return worker
+
+
+def _mcp_app(mcp: Any, config: OAuthConfig) -> Any:
+    """The FastMCP streamable-HTTP app, stateless, served per request for one bound store."""
+    multitenant.activate_multi_tenant()
+    mcp.settings.stateless_http = True
+    mcp.settings.streamable_http_path = "/mcp"
+    _apply_oauth_transport_security(mcp, config)
+    return mcp.streamable_http_app()
+
+
 def build_oauth_app(
     mcp: Any,
     config: OAuthConfig,
@@ -315,26 +340,11 @@ def build_oauth_app(
     store.ensure_root()
     prefix = config.path_prefix
     provider = GarminAuthProvider(config.token_root, f"{config.public_base_url}{prefix}/consent", store)
-
-    inbox = WebhookInbox(config.token_root)
-
-    def user_deleted(user_id: str, garmin_user_id: str) -> None:
-        provider.revoke_user(user_id)
-        inbox.scrub_garmin_user(garmin_user_id)
-        if on_user_deleted is not None:
-            on_user_deleted(user_id)
-
-    worker = WebhookWorker(inbox, NotificationProcessor(config, store, on_user_deleted=user_deleted))
-    worker.drain_on_start()
+    worker = _start_worker(config, store, provider, on_user_deleted)
     webhook_paths = _webhook_paths(config)
     routes = OAuthRoutes(config, store, provider, worker)
     auth_router = _auth_router(config, provider)
-
-    multitenant.activate_multi_tenant()
-    mcp.settings.stateless_http = True
-    mcp.settings.streamable_http_path = "/mcp"
-    _apply_oauth_transport_security(mcp, config)
-    inner_app = mcp.streamable_http_app()
+    inner_app = _mcp_app(mcp, config)
 
     async def app(scope: dict, receive: Any, send: Any) -> None:
         if scope["type"] != "http":
@@ -363,7 +373,10 @@ async def _serve_mcp(scope: dict, receive: Any, send: Any, inner_app: Any, store
     """MCP for the user the bearer token belongs to — and only that user's store."""
     header = dict(scope.get("headers", [])).get(b"authorization", b"").decode("latin-1")
     scheme, _, token = header.partition(" ")
-    access = await provider.load_access_token(token.strip()) if scheme.lower() == "bearer" else None
+    access = None
+    if scheme.lower() == "bearer":
+        # SQLite lookup (with a busy timeout) runs in a thread, not on the event loop.
+        access = await anyio.to_thread.run_sync(provider.lookup_access_token, token.strip())
     token_dir = store.resolve_existing(str(access.subject)) if access and access.subject else None
     if token_dir is None:
         metadata_url = build_resource_metadata_url(AnyHttpUrl(_resource_url(config)))

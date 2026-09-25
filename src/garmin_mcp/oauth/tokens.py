@@ -43,6 +43,8 @@ class TokenBundle:
     garmin_user_id: str
     scope: str | None = None
     permissions: list[str] | None = None
+    # When the user gave consent. A refresh keeps it; a reconnect replaces it.
+    connected_at: float | None = None
 
     def access_expired(self, *, now: float | None = None, leeway: int = TOKEN_REFRESH_LEEWAY_SECONDS) -> bool:
         now = time.time() if now is None else now
@@ -60,7 +62,8 @@ class TokenBundle:
             refresh_expires_at=(float(data["refresh_expires_at"]) if data.get("refresh_expires_at") is not None else None),
             garmin_user_id=str(data.get("garmin_user_id") or ""),
             scope=data.get("scope"),
-            permissions=list(data["permissions"]) if data.get("permissions") else None,
+            permissions=list(data["permissions"]) if data.get("permissions") is not None else None,
+            connected_at=float(data["connected_at"]) if data.get("connected_at") is not None else None,
         )
 
 

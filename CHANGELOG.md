@@ -22,8 +22,10 @@ All notable changes to this project are documented here. Format follows
   Ping callbacks are followed only on `apis.garmin.com`, and deliveries
   acknowledged before a restart are processed on start. Bodies up to 128 MB.
 - Deregistration deletes the user's tokens and stored data, but only once
-  Garmin itself rejects the user's tokens, so a forged notification cannot
-  delete anyone.
+  Garmin itself rejects the user's tokens (a refused grant, not `invalid_client`
+  or an outage), so neither a forged notification nor our own misconfiguration
+  deletes anyone. A deregistration Garmin has not confirmed yet is retried on
+  the normal schedule; one that races a reconnect is skipped.
 - User permission changes re-read permissions from Garmin and purge stored
   data behind a withdrawn permission.
 - The last 30 days are requested through Garmin's backfill after consent.
