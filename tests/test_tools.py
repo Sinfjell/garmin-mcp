@@ -404,3 +404,63 @@ def test_list_tools_exits_zero_without_network():
     assert "get_performance_metrics" in proc.stdout
     assert "get_personal_records" in proc.stdout
     assert "get_threshold_history" in proc.stdout
+    assert "get_activity_hr_zones" in proc.stdout
+
+
+# Shaped like Garmin's /activity-service/activity/{id}/hrTimeInZones response:
+# one entry per zone, floors matching tests/fixtures/hr_zones.json.
+HR_TIME_IN_ZONES = [
+    {"zoneNumber": 1, "secsInZone": 312.0, "zoneLowBoundary": 94},
+    {"zoneNumber": 2, "secsInZone": 2254.4, "zoneLowBoundary": 135},
+    {"zoneNumber": 3, "secsInZone": 1380.0, "zoneLowBoundary": 154},
+    {"zoneNumber": 4, "secsInZone": 90.0, "zoneLowBoundary": 164},
+    {"zoneNumber": 5, "secsInZone": 0.0, "zoneLowBoundary": 173},
+]
+
+
+class ZonesClient:
+    def __init__(self, payload):
+        self.payload = payload
+        self.asked = []
+
+    def get_activity_hr_in_timezones(self, activity_id):
+        self.asked.append(activity_id)
+        return self.payload
+
+
+def test_activity_hr_zones_minutes_and_boundaries(monkeypatch):
+    client = ZonesClient(list(reversed(HR_TIME_IN_ZONES)))  # order is not trusted
+    monkeypatch.setattr(server, "get_client", lambda: client)
+    result = json.loads(server.get_activity_hr_zones("24520607961"))
+    assert client.asked == ["24520607961"]
+    assert result["activity_id"] == "24520607961"
+    assert result["has_hr_data"] is True
+    assert [z["zone"] for z in result["zones"]] == [1, 2, 3, 4, 5]
+    z2 = result["zones"][1]
+    assert z2 == {"zone": 2, "secs": 2254.4, "minutes": 37.6, "floor_bpm": 135, "ceiling_bpm": 153}
+    assert result["zones"][4]["minutes"] == 0.0
+    assert result["zones"][4]["ceiling_bpm"] is None  # zone 5 is open-ended
+    assert result["total_secs"] == 4036.4
+    assert result["total_minutes"] == 67.3
+
+
+def test_activity_hr_zones_without_heart_rate_is_unknown_not_zero(monkeypatch):
+    for payload in ([], None, [{**z, "secsInZone": 0.0} for z in HR_TIME_IN_ZONES]):
+        monkeypatch.setattr(server, "get_client", lambda p=payload: ZonesClient(p))
+        result = json.loads(server.get_activity_hr_zones("1"))
+        assert result["has_hr_data"] is False
+        assert result["total_secs"] == 0
+
+
+def test_activity_hr_zones_skips_malformed_rows(monkeypatch):
+    payload = [{"zoneNumber": 0, "secsInZone": 60.0}, {"zoneNumber": "x"}, "junk", HR_TIME_IN_ZONES[1]]
+    monkeypatch.setattr(server, "get_client", lambda: ZonesClient(payload))
+    result = json.loads(server.get_activity_hr_zones("1"))
+    assert [z["zone"] for z in result["zones"]] == [2]
+    assert result["zones"][0]["ceiling_bpm"] is None
+
+
+def test_activity_hr_zones_unexpected_shape_is_reported(monkeypatch):
+    monkeypatch.setattr(server, "get_client", lambda: ZonesClient({"weird": True}))
+    result = json.loads(server.get_activity_hr_zones("1"))
+    assert result["error"] == "unexpected hr-time-in-zones shape"

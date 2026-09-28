@@ -7,6 +7,11 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- `get_activity_hr_zones(activity_id)`: time in heart-rate zones 1–5 for one
+  activity (seconds, minutes, and each zone's floor/ceiling bpm) from Garmin's
+  `hrTimeInZones`. `has_hr_data` is false for an activity recorded without heart
+  rate, so a consumer can leave its zone minutes empty instead of writing zeros.
+  Session mode only; oauth mode reports it as unavailable.
 - OAuth mode is an MCP authorization server (MCP authorization spec: RFC 9728
   resource metadata, RFC 8414 server metadata, RFC 7591 dynamic client
   registration, OAuth 2.1 + PKCE). Every user adds the same connector URL,

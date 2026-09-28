@@ -523,6 +523,64 @@ def _fmt_hr_zones(raw: Any) -> dict:
     }
 
 
+# --- Time in heart-rate zones (one activity) --------------------------------
+
+# get_activity_hr_in_timezones() returns one entry per zone with zoneNumber,
+# secsInZone and zoneLowBoundary: the zone's floor in bpm, as configured when the
+# activity was recorded. Like get_heart_rate_zones() there is no ceiling field,
+# so a zone ends one bpm below the next zone's floor and zone 5 is open-ended.
+# An activity recorded without heart rate comes back empty or with every zone at
+# zero seconds. That is "unknown", not "zero minutes": has_hr_data says which.
+
+
+def _secs_to_minutes(secs: float) -> float:
+    return round(secs / 60, 1)
+
+
+def _fmt_hr_time_in_zones(activity_id: str, raw: Any) -> dict:
+    """Reshape get_activity_hr_in_timezones() into seconds/minutes per zone plus bpm boundaries."""
+    if raw is None:
+        raw = []
+    if not isinstance(raw, list):
+        return {"activity_id": activity_id, "error": "unexpected hr-time-in-zones shape", "raw": raw}
+    by_zone: dict[int, dict] = {}
+    for row in raw:
+        if not isinstance(row, dict):
+            continue
+        number = row.get("zoneNumber")
+        if isinstance(number, bool) or not isinstance(number, (int, float)) or number != int(number):
+            continue
+        number = int(number)
+        if not 1 <= number <= _HR_ZONE_COUNT:
+            continue
+        secs = row.get("secsInZone")
+        floor = row.get("zoneLowBoundary")
+        by_zone[number] = {
+            "secs": float(secs) if isinstance(secs, (int, float)) and not isinstance(secs, bool) and secs >= 0 else None,
+            "floor": floor if isinstance(floor, (int, float)) and not isinstance(floor, bool) else None,
+        }
+    numbers = sorted(by_zone)
+    zones = []
+    for i, number in enumerate(numbers):
+        secs = by_zone[number]["secs"]
+        nxt = next((by_zone[n]["floor"] for n in numbers[i + 1:] if by_zone[n]["floor"] is not None), None)
+        zones.append({
+            "zone": number,
+            "secs": round(secs, 1) if secs is not None else None,
+            "minutes": _secs_to_minutes(secs) if secs is not None else None,
+            "floor_bpm": by_zone[number]["floor"],
+            "ceiling_bpm": (nxt - 1) if nxt is not None else None,
+        })
+    total = sum(z["secs"] for z in zones if z["secs"] is not None)
+    return {
+        "activity_id": activity_id,
+        "has_hr_data": total > 0,
+        "total_secs": round(total, 1),
+        "total_minutes": _secs_to_minutes(total),
+        "zones": zones,
+    }
+
+
 # --- Work-rep classification ------------------------------------------------
 
 # Garmin exposes two independent typings on the same activity. `intensityType`
@@ -994,6 +1052,25 @@ def get_activity_intervals(activity_id: str) -> str:
     the whole activity: the activity's own average pace is never a rep pace.
     """
     return _tool_call(lambda c: _classify_intervals(c, activity_id))
+
+
+@mcp.tool()
+def get_activity_hr_zones(activity_id: str) -> str:
+    """Get the time spent in each heart-rate zone (1-5) for one activity.
+
+    `activity_id` is the numeric id from list_recent_activities or
+    list_activities_by_date. Returns a JSON object with "zones": one entry per
+    zone with `secs` and `minutes` spent in it, plus the zone's `floor_bpm` and
+    `ceiling_bpm` as configured when the activity was recorded (zone 5 has no
+    ceiling). "total_secs" / "total_minutes" sum the zones.
+
+    "has_hr_data" is false when the activity was recorded without heart rate
+    (Garmin returns no zones, or every zone at zero): treat the minutes as
+    unknown then, never as zero. This is the per-activity breakdown behind
+    get_activity_details' `hasHrTimeInZones` flag; for the zone limits
+    themselves, without an activity, use get_running_threshold.
+    """
+    return _tool_call(lambda c: _fmt_hr_time_in_zones(activity_id, c.get_activity_hr_in_timezones(activity_id)))
 
 
 @mcp.tool()

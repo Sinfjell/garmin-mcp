@@ -191,6 +191,9 @@ class OfficialGarminClient:
     def get_activity_typed_splits(self, activity_id: str) -> Any:
         raise OfficialApiUnavailableError("typed interval / workout structure")
 
+    def get_activity_hr_in_timezones(self, activity_id: str) -> Any:
+        raise OfficialApiUnavailableError("heart-rate time in zones")
+
     # --- Daily / sleep / HR ---------------------------------------------
 
     def get_stats(self, date: str) -> dict:

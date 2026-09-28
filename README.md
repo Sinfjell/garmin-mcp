@@ -86,6 +86,7 @@ Restart your client and ask something like "How did I sleep last night?"
 | `get_threshold_history(start_date, end_date, aggregation="weekly")` | Lactate-threshold HR + pace as a dated trend series over a range |
 | `get_running_threshold()` | The threshold anchor for prescribing a session: lactate-threshold pace + LTHR with its measured date, plus the five HR zones with explicit floor and ceiling |
 | `get_activity_intervals(activity_id)` | The work reps of an interval session, warm-up and cool-down excluded (rests come back flagged `is_work_rep: false`) — with `classified_by` showing whether Garmin's workout structure or its lap intensity was used, an aggregate over the reps, and what was dropped and why |
+| `get_activity_hr_zones(activity_id)` | Time in heart-rate zones 1–5 for one activity: seconds and minutes per zone, each zone's floor/ceiling bpm, and `has_hr_data` (false = recorded without HR, so the minutes are unknown rather than zero) |
 | `find_comparable_intervals(target_distance_m, tolerance_pct=10, activity_limit=10)` | Work reps of a given distance across recent runs, e.g. every 1000 m rep from the last ten running sessions |
 
 All dates are `"YYYY-MM-DD"`. All tools return compact JSON.
