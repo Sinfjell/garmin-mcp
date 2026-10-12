@@ -77,6 +77,7 @@ Restart your client and ask something like "How did I sleep last night?"
 | `get_activity_laps(activity_id, include_gps=False)` | Per-lap breakdown: distance, durations, pace, HR, power, cadence, interval intensity (WARMUP/ACTIVE/REST) |
 | `list_activities_by_date(start_date, end_date)` | Activity summaries in a date range |
 | `get_daily_stats(date)` | Steps, calories, resting HR, stress for one day |
+| `get_hydration(date)` | Fluid intake for one day: ml logged, daily goal, estimated sweat loss |
 | `get_sleep(date)` | Sleep stages, sleep score, overnight HRV and resting HR |
 | `get_heart_rate(date)` | Min/max/resting HR and 7-day average resting HR for one day |
 | `get_body_battery(start_date, end_date)` | Body Battery charged/drained/highest/lowest per day |

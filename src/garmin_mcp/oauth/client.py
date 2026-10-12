@@ -259,6 +259,9 @@ class OfficialGarminClient:
     def get_training_status(self, date: str) -> dict:
         raise OfficialApiUnavailableError("training status")
 
+    def get_hydration_data(self, date: str) -> dict:
+        raise OfficialApiUnavailableError("hydration")
+
     def get_lactate_threshold(self, *args: Any, **kwargs: Any) -> dict:
         raise OfficialApiUnavailableError("lactate threshold")
 

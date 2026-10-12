@@ -315,6 +315,8 @@ def test_unavailable_metrics_raise(oauth_env):
         client.get_training_status("2026-09-20")
     with pytest.raises(OfficialApiUnavailableError, match="Body Battery"):
         client.get_body_battery("2026-09-01", "2026-09-07")
+    with pytest.raises(OfficialApiUnavailableError, match="hydration"):
+        client.get_hydration_data("2026-09-20")
 
 
 def test_tool_call_surfaces_official_unavailable(oauth_env, monkeypatch):

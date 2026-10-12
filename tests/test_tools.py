@@ -88,6 +88,17 @@ class FakeClient:
             "heartRateValues": [[1, 60]] * 1440,
         }
 
+    def get_hydration_data(self, cdate):
+        return {
+            "userId": 1,
+            "calendarDate": cdate,
+            "valueInML": 1750.0,
+            "goalInML": 2500.0,
+            "sweatLossInML": 620.0,
+            "activityIntakeInML": 0.0,
+            "lastEntryTimestampLocal": f"{cdate}T18:42:00.0",
+        }
+
     def get_body_battery(self, start_date, end_date):
         return [
             {
@@ -224,6 +235,15 @@ def test_get_heart_rate_strips_per_minute_values(monkeypatch):
     assert result["minHeartRate"] == 45
     assert result["restingHeartRate"] == 48
     assert "heartRateValues" not in result
+
+
+def test_get_hydration_returns_daily_intake(monkeypatch):
+    monkeypatch.setattr(server, "get_client", lambda: FakeClient())
+    result = json.loads(server.get_hydration("2026-07-17"))
+    assert result["calendarDate"] == "2026-07-17"
+    assert result["valueInML"] == 1750.0
+    assert result["goalInML"] == 2500.0
+    assert result["sweatLossInML"] == 620.0
 
 
 def test_get_body_battery_derives_highest_lowest(monkeypatch):

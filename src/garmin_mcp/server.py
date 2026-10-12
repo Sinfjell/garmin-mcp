@@ -863,6 +863,19 @@ def get_daily_stats(date: str) -> str:
 
 
 @mcp.tool()
+def get_hydration(date: str) -> str:
+    """Get hydration (fluid intake) for one day.
+
+    `date` must be "YYYY-MM-DD". Returns a JSON object with calendarDate,
+    valueInML (fluid logged that day), goalInML (the day's intake goal),
+    sweatLossInML (estimated sweat loss from activities), activityIntakeInML,
+    and lastEntryTimestampLocal. A day with nothing logged comes back with a
+    null or zero valueInML rather than an error.
+    """
+    return _tool_call(lambda c: c.get_hydration_data(date))
+
+
+@mcp.tool()
 def get_sleep(date: str) -> str:
     """Get sleep summary for the night ending on the given date.
 
