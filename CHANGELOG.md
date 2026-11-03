@@ -11,8 +11,10 @@ All notable changes to this project are documented here. Format follows
   from the new `uv.lock`, runs as uid 10001 on a read-only filesystem with one
   data volume, bound to loopback. Host setup, nginx, upgrades and backup in
   `docs/docker-deploy.md`.
-- `GET /garmin-oauth/healthz` in OAuth mode: 200 when the data directory is
+- `GET`/`HEAD /garmin-oauth/healthz` in OAuth mode: 200 when the data directory is
   writable, 503 when not. No auth, no user data.
+- `garmin-mcp-backup`: streams a consistent gzipped tar of the OAuth data
+  directory to stdout (SQLite via its backup API), writing nothing inside it.
 
 ### Changed
 - `requires-python` is now `>=3.12`. `garminconnect` 0.3.7+ already required it,

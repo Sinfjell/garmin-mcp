@@ -56,6 +56,7 @@ garmin-mcp = "garmin_mcp.server:main"
 garmin-mcp-auth = "garmin_mcp.auth:main"
 garmin-mcp-onboarding = "garmin_mcp.onboarding.app:main"
 garmin-mcp-tenant = "garmin_mcp.onboarding.cli:main"
+garmin-mcp-backup = "garmin_mcp.oauth.backup:main"
 
 [project.urls]
 Homepage = "https://github.com/Sinfjell/garmin-mcp"

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import secrets
 from urllib.parse import parse_qs, urlparse
 
@@ -345,8 +346,11 @@ def test_healthz_answers_without_auth(app):
         r = http.get("/garmin-oauth/healthz")
         assert r.status_code == 200
         assert r.json() == {"status": "ok"}
+        # Uptime monitors often probe with HEAD.
+        assert http.head("/garmin-oauth/healthz").status_code == 200
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
 def test_healthz_reports_unwritable_data_dir(app, oauth_env):
     oauth_env.token_root.chmod(0o500)
     try:

@@ -352,7 +352,7 @@ def build_oauth_app(
             return
         path: str = scope.get("path", "")
         method: str = scope.get("method", "GET").upper()
-        if path == f"{prefix}/healthz" and method == "GET":
+        if path == f"{prefix}/healthz" and method in ("GET", "HEAD"):
             await _health(send, config)
         elif path == routes.consent_path:
             await routes.consent(scope, receive, send)
