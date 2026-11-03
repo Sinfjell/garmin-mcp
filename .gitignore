@@ -18,3 +18,6 @@ venv/
 .ruff_cache/
 .mypy_cache/
 .venv/
+
+# Docker deploy: the data volume stays on the host
+data/

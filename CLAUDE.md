@@ -41,10 +41,12 @@ someone else's. Any diff touching them needs `review-against-plan` before merge.
    are only followed on `apis.garmin.com`. Prove isolation over HTTP with two
    users' tokens.
 
-6. **Dependencies carry an upper bound.** No lockfile exists and the production
-   host re-resolves on restart, so an unpinned dependency means any restart can
-   pull a breaking major. Lift a ceiling only together with a port to the new
-   API — never to make CI green.
+6. **Dependencies carry an upper bound.** The session units on the host run
+   `uvx --from git+...@main`, which ignores `uv.lock` and re-resolves on restart,
+   so an unpinned dependency means any restart can pull a breaking major. Lift a
+   ceiling only together with a port to the new API — never to make CI green.
+   The Docker image installs from `uv.lock`; after changing a dependency, run
+   `uv lock` and commit the lockfile in the same change.
 
 ## Gates
 
@@ -55,6 +57,10 @@ garmin-mcp --list-tools
 ```
 
 ## Deploy
+
+The OAuth instance runs in Docker (`Dockerfile`, `compose.yaml`); see
+`docs/docker-deploy.md`. Its health check is `GET /garmin-oauth/healthz`.
+The rest of this section is about the session units, which still use uvx:
 
 `uvx --from git+...@main` runs without `--refresh`, so a plain
 `systemctl restart` reuses the cached build and silently ships nothing. Follow

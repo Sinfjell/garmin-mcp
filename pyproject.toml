@@ -7,7 +7,7 @@ name = "garmin_mcp"
 version = "0.1.0"
 description = "Garmin MCP server for Claude and other AI assistants"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "Sindre Fjellestad" }]
 # Every dependency carries an upper bound, without exception. There is no
@@ -56,6 +56,7 @@ garmin-mcp = "garmin_mcp.server:main"
 garmin-mcp-auth = "garmin_mcp.auth:main"
 garmin-mcp-onboarding = "garmin_mcp.onboarding.app:main"
 garmin-mcp-tenant = "garmin_mcp.onboarding.cli:main"
+garmin-mcp-backup = "garmin_mcp.oauth.backup:main"
 
 [project.urls]
 Homepage = "https://github.com/Sinfjell/garmin-mcp"
