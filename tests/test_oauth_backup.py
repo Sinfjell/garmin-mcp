@@ -49,3 +49,24 @@ def test_backup_writes_nothing_inside_the_data_dir(tmp_path):
     before = sorted(p.relative_to(root) for p in root.rglob("*"))
     write_backup(root, io.BytesIO())
     assert sorted(p.relative_to(root) for p in root.rglob("*")) == before
+
+
+def test_backup_skips_a_file_removed_after_listing(tmp_path, monkeypatch):
+    root = tmp_path / "data"
+    _db(root / ".mcp-auth.sqlite3", ["x"]).close()
+    gone = root / ".inbox" / "delivery.json"
+    gone.parent.mkdir(parents=True)
+    gone.write_text("{}")
+    real_rglob = type(root).rglob
+
+    def rglob_then_delete(self, pattern):
+        items = list(real_rglob(self, pattern))
+        gone.unlink()
+        return iter(items)
+
+    monkeypatch.setattr(type(root), "rglob", rglob_then_delete)
+    buf = io.BytesIO()
+    assert write_backup(root, buf) == 1
+    buf.seek(0)
+    with tarfile.open(fileobj=buf, mode="r:gz") as tar:
+        assert ".inbox/delivery.json" not in tar.getnames()

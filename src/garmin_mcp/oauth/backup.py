@@ -27,27 +27,40 @@ def write_backup(root: Path, out: BinaryIO) -> int:
     count = 0
     with tarfile.open(fileobj=out, mode="w|gz") as tar, tempfile.TemporaryDirectory() as scratch:
         for path in sorted(root.rglob("*")):
-            name = str(path.relative_to(root))
-            if path.is_dir():
-                tar.add(path, arcname=name, recursive=False)
-            elif path.suffix == ".sqlite3":
-                copy = Path(scratch) / "copy.sqlite3"
-                copy.unlink(missing_ok=True)
-                src, dst = sqlite3.connect(path), sqlite3.connect(copy)
-                try:
-                    src.backup(dst)
-                finally:
-                    src.close()
-                    dst.close()
-                info = tar.gettarinfo(copy, arcname=name)
-                info.mode = path.stat().st_mode & 0o777
-                with copy.open("rb") as fh:
-                    tar.addfile(info, fh)
-                count += 1
-            elif path.is_file() and not path.name.endswith(_SKIP_SUFFIXES):
-                tar.add(path, arcname=name)
-                count += 1
+            try:
+                count += _add(tar, root, path, Path(scratch))
+            except FileNotFoundError:
+                # The worker removed it after the listing (a processed delivery): nothing to keep.
+                continue
     return count
+
+
+def _add(tar: tarfile.TarFile, root: Path, path: Path, scratch: Path) -> int:
+    """Add one entry; returns 1 for a file, 0 for a directory or a skipped file."""
+    name = str(path.relative_to(root))
+    if path.is_dir():
+        tar.add(path, arcname=name, recursive=False)
+        return 0
+    if path.suffix == ".sqlite3":
+        copy = scratch / "copy.sqlite3"
+        copy.unlink(missing_ok=True)
+        if not path.exists():
+            raise FileNotFoundError(path)
+        src, dst = sqlite3.connect(path), sqlite3.connect(copy)
+        try:
+            src.backup(dst)
+        finally:
+            src.close()
+            dst.close()
+        info = tar.gettarinfo(copy, arcname=name)
+        info.mode = path.stat().st_mode & 0o777
+        with copy.open("rb") as fh:
+            tar.addfile(info, fh)
+        return 1
+    if path.is_file() and not path.name.endswith(_SKIP_SUFFIXES):
+        tar.add(path, arcname=name)
+        return 1
+    return 0
 
 
 def main() -> None:
