@@ -352,7 +352,9 @@ def build_oauth_app(
             return
         path: str = scope.get("path", "")
         method: str = scope.get("method", "GET").upper()
-        if path == routes.consent_path:
+        if path == f"{prefix}/healthz" and method == "GET":
+            await _health(send, config)
+        elif path == routes.consent_path:
             await routes.consent(scope, receive, send)
         elif path == f"{prefix}/callback" and method == "GET":
             await routes.callback(scope, send)
@@ -366,6 +368,18 @@ def build_oauth_app(
     app.webhook_worker = worker  # type: ignore[attr-defined]  # tests wait on it
     app.auth_provider = provider  # type: ignore[attr-defined]
     return app
+
+
+async def _health(send: Any, config: OAuthConfig) -> None:
+    """Liveness for the container and uptime checks: the process answers and its data dir is writable.
+
+    Says nothing about users or tokens, so it is safe to expose without auth.
+    """
+    writable = await anyio.to_thread.run_sync(os.access, config.token_root, os.W_OK)
+    if writable:
+        await _json_response(send, 200, {"status": "ok"})
+    else:
+        await _json_response(send, 503, {"status": "unavailable", "reason": "data directory not writable"})
 
 
 async def _serve_mcp(scope: dict, receive: Any, send: Any, inner_app: Any, store: TokenStore,

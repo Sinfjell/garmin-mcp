@@ -1,0 +1,31 @@
+# Garmin MCP (OAuth) on one host. Secrets live in .env next to this file (mode 0600, never committed);
+# see docs/docker-deploy.md. Data lives in ./data, owned by uid 10001.
+services:
+  garmin-mcp-oauth:
+    build:
+      context: .
+      args:
+        VERSION: ${GARMIN_MCP_VERSION:-dev}
+    image: garmin-mcp:${GARMIN_MCP_VERSION:-dev}
+    env_file: .env
+    environment:
+      GARMIN_AUTH_MODE: oauth
+      GARMIN_OAUTH_TOKEN_ROOT: /data
+    volumes:
+      - ./data:/data
+    # Loopback only: nginx terminates TLS and proxies to this port.
+    ports:
+      - "127.0.0.1:${GARMIN_MCP_PORT:-8771}:8000"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -7,6 +7,16 @@ All notable changes to this project are documented here. Format follows
 ## [Unreleased]
 
 ### Added
+- Docker image and `compose.yaml` for the OAuth instance: dependencies installed
+  from the new `uv.lock`, runs as uid 10001 on a read-only filesystem with one
+  data volume, bound to loopback. Host setup, nginx, upgrades and backup in
+  `docs/docker-deploy.md`.
+- `GET /garmin-oauth/healthz` in OAuth mode: 200 when the data directory is
+  writable, 503 when not. No auth, no user data.
+
+### Changed
+- `requires-python` is now `>=3.12`. `garminconnect` 0.3.7+ already required it,
+  so installs on 3.10 and 3.11 never worked.
 - `get_activity_hr_zones(activity_id)`: time in heart-rate zones 1–5 for one
   activity (seconds, minutes, and each zone's floor/ceiling bpm) from Garmin's
   `hrTimeInZones`. `has_hr_data` is false for an activity recorded without heart

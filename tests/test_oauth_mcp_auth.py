@@ -338,3 +338,21 @@ def test_reconnecting_with_less_sharing_drops_the_unshared_data(app, oauth_env, 
     assert [p for p in oauth_env.token_root.iterdir() if not p.name.startswith(".")] == [user_dir]
     assert data.by_date("sleeps", "2026-09-20") == []
     assert data.by_activity_id("activities", "1") is not None
+
+
+def test_healthz_answers_without_auth(app):
+    with TestClient(app, base_url=BASE) as http:
+        r = http.get("/garmin-oauth/healthz")
+        assert r.status_code == 200
+        assert r.json() == {"status": "ok"}
+
+
+def test_healthz_reports_unwritable_data_dir(app, oauth_env):
+    oauth_env.token_root.chmod(0o500)
+    try:
+        with TestClient(app, base_url=BASE) as http:
+            r = http.get("/garmin-oauth/healthz")
+            assert r.status_code == 503
+            assert r.json()["status"] == "unavailable"
+    finally:
+        oauth_env.token_root.chmod(0o700)

@@ -112,6 +112,9 @@ should use `garmin-mcp-auth` instead.
 
 ### Official OAuth (eval / prod-candidate instance)
 
+Hosted with Docker: `docker compose up -d` with the `GARMIN_OAUTH_*` secrets in `.env`. See
+[docs/docker-deploy.md](docs/docker-deploy.md) for the host setup, nginx, upgrades and backup.
+
 Set `GARMIN_AUTH_MODE=oauth` and the `GARMIN_OAUTH_*` variables in
 `.env.example` to run a **separate** instance against the Garmin Connect
 Developer Program (OAuth 2.0 PKCE, Health + Activity APIs only). This does not
